@@ -10,14 +10,15 @@ use lexer::create_lexer;
 
 mod lexer;
 mod token;
+mod ast;
 
 #[cfg(test)]
 mod tests;
 
 fn main() {
-    let code = "(1 + (5 - 1)) == 5";
+    let code = "2 * (5 + 10)";
 
-    for token in create_lexer(code){
-        dbg!(token);
-    }    
+  let mut tokens = create_lexer(code).peekable();   
+
+    dbg!(ast::parse_node(&mut tokens));
 }

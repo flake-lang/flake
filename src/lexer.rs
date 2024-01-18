@@ -1,5 +1,5 @@
 
-use std::{thread::yield_now, ops::Coroutine, iter::Peekable};
+use std::iter::Peekable;
 
 use crate::token::{self, Token};
 
@@ -68,7 +68,8 @@ pub fn lex_string_literal(input: &mut Peekable<impl Iterator<Item = char>>) -> R
 
 pub fn lex_number_literal(input: &mut Peekable<impl Iterator<Item = char>>) -> Result<i64, LexError>{
     let mut buffer = String::new();
-    
+    let mut maybe_sign_possible = true;
+        
     loop{
         let chr = if let Some(chr) = input.peek(){
             chr
@@ -81,6 +82,12 @@ pub fn lex_number_literal(input: &mut Peekable<impl Iterator<Item = char>>) -> R
                 let c = chr.clone();
                 input.next();
                 buffer.push(c);
+                maybe_sign_possible = false;
+            },
+            '-' => if maybe_sign_possible{
+                input.next();
+                buffer.push('-');
+                maybe_sign_possible = false;      
             },
             _ => break
         };
@@ -121,7 +128,7 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::Token> + '
                 '}' => yield lex_token(Token::RightBrace, &mut input),
                 '"' => yield Token::String(lex_string_literal(&mut input).expect("Failed to lex string literal")),
                 '0'..'9' => yield Token::Number(lex_number_literal(&mut input).expect("Failed to lex number literal")),
-                _ => panic!("LEX001: invalid character in source. {}", chr)
+                _ => panic!("LEX001: invalid character in source. {}", chr) // TODO: Identifiers
             }
         }
 
