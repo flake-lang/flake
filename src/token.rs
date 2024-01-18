@@ -16,8 +16,8 @@ pub enum Token {
     Assignment,
     String(String),
     Number(i64),
-    True,
-    False,
+    Identifier(String),
+    Boolean(bool),
     And,
     Or,
     Not,
@@ -27,5 +27,7 @@ pub enum Token {
     RightBrace,
     Comma,
     Semicolon,
+    Let,
+    Return,
     EOF,
 }

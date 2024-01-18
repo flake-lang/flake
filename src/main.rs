@@ -1,5 +1,11 @@
-#![feature(coroutines, iter_from_coroutine, coroutine_trait, generic_arg_infer)]
-#![feature(exclusive_range_pattern)]
+#![feature(
+    coroutines,
+    iter_from_coroutine,
+    coroutine_trait,
+    generic_arg_infer,
+    exclusive_range_pattern,
+    slice_pattern
+)]
 
 use lexer::create_lexer;
 
@@ -14,7 +20,7 @@ mod token;
 mod tests;
 
 fn main() {
-    let code = "1 + (5 + 10)";
+    let code = include_str!("../test.fl");
 
     let mut tokens = create_lexer(code).peekable();
 
