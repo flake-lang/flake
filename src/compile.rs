@@ -97,6 +97,7 @@ impl<'a> RecursiveBuilder<'a> {
                     _ => unimplemented!("Pipeline Error!\nC012: LLVM RecursiveBuilder<'_> encoutered a unknown operator in binary expression!")
                 }
             }
+            _ => todo!(),
         }
     }
 }

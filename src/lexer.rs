@@ -4,7 +4,7 @@ use crate::token::{self, Token};
 
 #[derive(Debug)]
 #[repr(u32)]
-enum LexError {
+pub enum LexError {
     InvalidCharacter,
     UnexpectedEndOfFile,
     InvalidStringLiteral,
@@ -41,11 +41,7 @@ pub fn lex_token(token: Token, input: &mut Peekable<impl Iterator<Item = char>>)
     input.next();
 
     loop {
-        let chr = if let Some(chr) = input.peek() {
-            chr
-        } else {
-            break;
-        };
+        let chr = peek_or_break!(input);
 
         if let Some(combined_token) = current_token.try_combine_with(*chr) {
             input.next();
@@ -117,12 +113,7 @@ pub fn lex_number_literal(
     let mut maybe_sign_possible = true;
 
     loop {
-        let chr = if let Some(chr) = input.peek() {
-            chr
-        } else {
-            break;
-        };
-
+        let chr = peek_or_break!(input);
         match chr {
             '0'..'9' => {
                 let c = chr.clone();
@@ -151,11 +142,7 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::Token> + '
         let mut input = code.chars().peekable();
 
         loop {
-            let chr = if let Some(chr) = input.peek() {
-                chr
-            } else {
-                break;
-            };
+            let chr = peek_or_break!(input);
 
             match chr {
                 ' ' => {
@@ -186,7 +173,18 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::Token> + '
                         lex_number_literal(&mut input).expect("Failed to lex number literal"),
                     )
                 }
-                _ => yield lex_unhandled(&mut input),
+                _ => {
+                    yield match lex_unhandled(&mut input) {
+                        Token::Identifier(ident) => {
+                            if ident.is_empty() {
+                                break;
+                            } else {
+                                Token::Identifier(ident)
+                            }
+                        }
+                        t => t,
+                    }
+                }
             }
         }
 
