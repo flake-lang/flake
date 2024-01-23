@@ -1,1 +1,1 @@
-1 + true / "Hello!";
+true == cast[bool] (255 / cast[f32] x)

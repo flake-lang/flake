@@ -25,14 +25,25 @@ fn main() {
     let code = include_str!("../test.fl");
 
     let mut tokens = create_lexer(code);
+    let mut tokens_peekable = tokens.peekable();
 
-    for token in tokens {
-        match token {
-            token::Token::Identifier(_) => continue,
-            _ => {}
+    let mut exprs = Vec::<ast::Expr>::new();
+
+    loop {
+        if tokens_peekable.peek() == Some(&token::Token::Semicolon) {
+            tokens_peekable.next();
         }
-        println!("==> Found Token: {:?}", token)
+
+        if let Some(ast_node) = ast::Expr::parse(&mut tokens_peekable) {
+            println!("{:#?}", &ast_node);
+            println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
+            exprs.push(ast_node);
+        } else {
+            break;
+        }
     }
+
+    println!("{:#?}", exprs);
 
     // let ast = dbg!(parser::parse_node(&mut tokens_peekable)).expect("Failed to parse syntax tree");
 

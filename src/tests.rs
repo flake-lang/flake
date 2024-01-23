@@ -2,8 +2,6 @@
 
 /// Tests related to Flake's Lexer.
 pub mod lexer {
-    use core::slice::SlicePattern;
-
     use crate::lexer::*;
     use crate::token::Token::{self, *};
 
@@ -47,5 +45,29 @@ pub mod lexer {
             tokens.as_slice(),
             [Identifier("example_identifier_123".to_owned()), EOF]
         )
+    }
+}
+
+mod parser {
+    use crate::parser::*;
+
+    #[test]
+    pub fn unary_expressions() {
+        todo!()
+    }
+
+    #[test]
+    pub fn binary_expressions() {
+        todo!()
+    }
+
+    #[test]
+    pub fn operators() {
+        todo!()
+    }
+
+    #[test]
+    pub fn constant_values() {
+        todo!()
     }
 }

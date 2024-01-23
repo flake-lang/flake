@@ -58,6 +58,7 @@ pub fn try_lex_keyword(s: String) -> Option<Token> {
     match s.as_str() {
         "let" => Some(Token::Let),
         "return" => Some(Token::Return),
+        "cast" => Some(Token::Cast),
         "true" => Some(Token::Boolean(true)),
         "false" => Some(Token::Boolean(false)),
         _ => None,
@@ -72,7 +73,7 @@ pub fn lex_unhandled(input: &mut Peekable<impl Iterator<Item = char>>) -> Token 
             let chr = peek_or_break!(input);
 
             match chr {
-                'A'..'z' | '_' | '0'..'9' => buffer.push(*chr),
+                'A'..'Z' | 'a'..'z' | '_' | '0'..'9' => buffer.push(*chr),
                 _ => break,
             }
 
@@ -145,7 +146,7 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::Token> + '
             let chr = peek_or_break!(input);
 
             match chr {
-                ' ' => {
+                ' ' | '\n' => {
                     input.next();
                     continue;
                 }
@@ -154,6 +155,7 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::Token> + '
                 '-' => yield lex_token(Token::Minus, &mut input),
                 '*' => yield lex_token(Token::Star, &mut input),
                 '%' => yield lex_token(Token::Percent, &mut input),
+                '!' => yield lex_token(Token::ExclamationMark, &mut input),
                 '/' => yield lex_token(Token::Slash, &mut input),
                 ',' => yield lex_token(Token::Comma, &mut input),
                 ';' => yield lex_token(Token::Semicolon, &mut input),
@@ -161,6 +163,8 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::Token> + '
                 ')' => yield lex_token(Token::RightParenthesis, &mut input),
                 '>' => yield lex_token(Token::GreaterThan, &mut input),
                 '<' => yield lex_token(Token::LessThan, &mut input),
+                '[' => yield lex_token(Token::OpeningBracket, &mut input),
+                ']' => yield lex_token(Token::ClosingBracket, &mut input),
                 '{' => yield lex_token(Token::LeftBrace, &mut input),
                 '}' => yield lex_token(Token::RightBrace, &mut input),
                 '"' => {
