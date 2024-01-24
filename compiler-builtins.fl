@@ -1,4 +1,5 @@
 
+// Primitives
 type u8 = __flakec_builtin;
 type u16 = __flakec_builtin;
 type u32 = __flakec_builtin;

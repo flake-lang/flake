@@ -61,6 +61,7 @@ pub fn try_lex_keyword(s: String) -> Option<Token> {
         "cast" => Some(Token::Cast),
         "true" => Some(Token::Boolean(true)),
         "false" => Some(Token::Boolean(false)),
+        "type" => Some(Token::TypeAlias),
         _ => None,
     }
 }

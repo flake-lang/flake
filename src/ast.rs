@@ -242,6 +242,8 @@ pub enum Type {
     Never,
     #[default]
     Unknown,
+    _Custom(Box<Type>),
+    _Builtin,
 }
 
 pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
@@ -255,8 +257,9 @@ pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
         "f32" => Some(Type::Float { bits: 32 }),
         "never" => Some(Type::Never),
         "__flakec_unknown" => Some(Type::Unknown),
+        "__flakec_builtin" => Some(Type::_Builtin),
         _ => match ctx.try_get_type(s.clone()) {
-            Some(ty) => Some(ty),
+            Some(ty) => Some(Type::_Custom(Box::new(ty))),
             None => error_and_return!(
                 #[syntax]
                 ("the type {} cannot be would in the current context.", s)
@@ -274,6 +277,10 @@ pub enum Statement {
         ty: Type,
         ident: String,
         value: Expr,
+    },
+    TypeAlias {
+        name: String,
+        target: Type,
     },
     Expression(Expr),
 }
@@ -317,7 +324,7 @@ pub fn parse_raw_params(input: &mut Peekable<impl Iterator<Item = Token>>) -> Op
     Some(collected)
 }
 
-pub fn parse_type<'a>(input: impl Iterator<Item = &'a Token>, ctx: &mut Context) -> Option<Type> {
+pub fn parse_type<'a>(input: &mut impl Iterator<Item = Token>, ctx: &mut Context) -> Option<Type> {
     let mut input = input;
     let ident = match try_cast!(input.next()?, Token::Identifier, ident) {
         Some(ident) => ident,
@@ -360,7 +367,7 @@ pub fn parse_let(
     _ = try_cast!(input.next()?, Token::Semicolon)?;
 
     let ty = match maybe_explicit_type {
-        Some(toks) => parse_type(toks.iter(), ctx)?,
+        Some(toks) => parse_type(&mut toks.iter().cloned(), ctx)?,
         None => match infer_expr_type(value.clone()) {
             Type::Unknown => error_and_return!(
                 #[compiler]
@@ -402,6 +409,37 @@ impl Context {
     pub fn register_local_variable(&mut self, name: String, ty: Type) -> Option<Type> {
         self.locals.insert(name, ty)
     }
+
+    pub fn register_type_alias(&mut self, name: String, target: Type) -> Option<Type> {
+        self.types.insert(name, target)
+    }
+}
+
+pub fn parse_type_alias(
+    input: &mut Peekable<impl Iterator<Item = Token>>,
+    ctx: &mut Context,
+) -> Option<Statement> {
+    input.next()?; // Skip "type" token.
+
+    let ident = try_cast!(input.next()?, Token::Identifier, ident)?;
+
+    if try_cast!(input.next()?, Token::Equals).is_none() {
+        error_and_return!(
+            #[syntax]
+            "expcted equals sign."
+        );
+    };
+
+    let target = parse_type(input, ctx)?;
+
+    _ = try_cast!(input.next()?, Token::Semicolon)?;
+
+    ctx.register_type_alias(ident.clone(), target.clone());
+
+    Some(Statement::TypeAlias {
+        name: ident,
+        target,
+    })
 }
 
 impl Statement {
@@ -430,6 +468,7 @@ impl Statement {
                     )
                 }
             },
+            token => Token::TypeAlias => return parse_type_alias(input, ctx),
             Expr::parse(input, ctx) => Some(expr) => {
                 _ = try_cast!(input.next()?, Token::Semicolon)?;
                 return Some(Self::Expression(expr));

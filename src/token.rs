@@ -1,5 +1,6 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
+#[non_exhaustive]
 pub enum Token {
     Plus,
     Minus,
@@ -33,5 +34,6 @@ pub enum Token {
     Let,
     Return,
     Cast,
+    TypeAlias,
     EOF,
 }
