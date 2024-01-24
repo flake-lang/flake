@@ -1,9 +1,5 @@
-let[bool] test = true;
-
-let not_test = !test;
-
-let a = 0;
-
-let b = 2 * a;
-
-let c = cast[__flakec_unknown] b;
+let a = 1;
+let b = 1 + a;
+2 == b;
+false == (1 == b);
+return b;

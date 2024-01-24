@@ -1,6 +1,8 @@
 //! Flake Compiler (using LLVM)
 
-use std::path::Path;
+use std::{ops::Deref, path::Path};
+
+/*
 
 use inkwell::{
     self,
@@ -8,9 +10,9 @@ use inkwell::{
     context::Context,
     module::Module,
     types,
-    types::IntType,
-    values::{AnyValue, IntValue},
-    *,
+    types::{AnyType, AnyTypeEnum, IntType, BasicType, BasicTypeEnum},
+    values::{AnyValue, AnyValueEnum, IntMathValue, IntValue},
+    *, basic_block::BasicBlock,
 };
 
 use crate::ast::{Node, Operator};
@@ -44,7 +46,7 @@ impl Compiler {
         builder.position_at_end(basic_block);
 
         for node in ast {
-            let recursive_builder = RecursiveBuilder::new(i64_type, &builder);
+            let recursive_builder = RecursiveBuilder::new(i64_type, &builder, &self.llvm_context);
             let return_value = recursive_builder.build(&node);
             let _ = builder.build_return(Some(&return_value));
         }
@@ -66,38 +68,50 @@ impl Compiler {
 pub struct RecursiveBuilder<'a> {
     i64_type: IntType<'a>,
     builder: &'a Builder<'a>,
+    context: &'a Context,
 }
+
+use crate::ast;
 
 impl<'a> RecursiveBuilder<'a> {
-    pub fn new(i64_type: IntType<'a>, builder: &'a Builder) -> Self {
-        Self { i64_type, builder }
-    }
-    pub fn build(&self, ast: &Node) -> IntValue {
-        match ast {
-            Node::Int(n) => self.i64_type.const_int(*n as u64, true),
-            Node::UnaryExpr { op, child } => {
-                let child = self.build(child);
-                match op {
-                    Operator::Minus => child.const_neg(),
-                    Operator::Plus => child,
-                    _ => child,
-                }
-            }
-            Node::BinaryExpr { op, lhs, rhs } => {
-                let left = self.build(lhs);
-                let right = self.build(rhs);
-
-                match op {
-                    Operator::Plus => self
-                        .builder
-                        .build_int_add(left, right, "plus_temp"),
-                    Operator::Minus => self
-                        .builder
-                        .build_int_sub(left, right, "minus_temp"),
-                    _ => unimplemented!("Pipeline Error!\nC012: LLVM RecursiveBuilder<'_> encoutered a unknown operator in binary expression!")
-                }
-            }
-            _ => todo!(),
+    pub fn new(i64_type: IntType<'a>, builder: &'a Builder, ctx: &'a Context) -> Self {
+        Self {
+            i64_type,
+            builder,
+            context: ctx,
         }
     }
+
+    pub fn build_binary_expr(&self, op: Operator, rhs: ast::Expr, lhs: ast::Expr){
+        match (op, ast::infer_expr_type(rhs)){
+            (Operator::Plus, ast::Type::UnsignedInt { .. }) => self.builder.build_int_nsw_neg(, )
+        }
+    }
+
+    pub fn build_expr(&self, ast: ast::Expr) {
+        match ast{
+            ast::Expr::Constant(v) => self.build_value(v),
+            ast::Expr::Binary { op, rhs, lhs } =>
+        }
+    }
+
+    pub fn build_type(&self, ast_ty: crate::ast::Type) -> Result<AnyTypeEnum, String> {
+        match ast_ty {
+            ast::Type::Boolean => Ok(self.context.bool_type().as_any_type_enum()),
+            ast::Type::Void => Ok(self.context.void_type().as_any_type_enum()),
+            _ => panic!("compiler error: invalid type: {:?}", ast_ty),
+        }
+    }
+
+
+    pub fn build_basic_type(&self, ast_ty: crate::ast::Type) -> Result<BasicTypeEnum, String> {
+        match ast_ty {
+            ast::Type::Boolean => Ok(self.context.bool_type().as_basic_type_enum()),
+            ast::Type::UnsignedInt { bits: 32 } => Ok(self.context.i32_type().as_basic_type_enum()),
+            _ => panic!("compiler error: invalid type: {:?}", ast_ty),
+        }
+    }
+
+
 }
+*/

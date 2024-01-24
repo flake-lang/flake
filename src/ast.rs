@@ -62,6 +62,7 @@ pub enum Expr {
         child: Box<Expr>,
     },
     Variable {
+        ty: Type,
         ident: String,
     },
     Cast {
@@ -184,10 +185,11 @@ impl Expr {
                      return Some(Self::Unary { op, child: Box::new(Self::parse(input, ctx)?) });
                  },
                  token => Token::Cast => return parse_cast(input, ctx),
-                 token => Token::Identifier(ident) => {
+                token => Token::Identifier(ident) => {
                     let ident_cloned = ident.clone();
+                    let ty = ctx.typeof_variable(ident_cloned.clone())?;
                     input.next()?;
-                    return Some(Self::Variable { ident: ident_cloned }    );
+                    return Some(Self::Variable { ty, ident: ident_cloned }    );
             }
         };
 
@@ -197,12 +199,12 @@ impl Expr {
     }
 }
 
-pub fn infer_expr_type(expr: Expr, ctx: &mut Context) -> Type {
+pub fn infer_expr_type(expr: Expr) -> Type {
     match expr {
         Expr::Constant(value) => value.get_type(),
         Expr::Binary { rhs, lhs, .. } => {
-            let right_ty = infer_expr_type(*rhs.clone(), ctx);
-            let left_ty = infer_expr_type(*lhs.clone(), ctx);
+            let right_ty = infer_expr_type(*rhs.clone());
+            let left_ty = infer_expr_type(*lhs.clone());
 
             if right_ty != left_ty {
                 Type::Unknown
@@ -210,17 +212,8 @@ pub fn infer_expr_type(expr: Expr, ctx: &mut Context) -> Type {
                 left_ty
             }
         }
-        Expr::Unary { child, .. } => infer_expr_type(*child.clone(), ctx),
-        Expr::Variable { ident } => match ctx.typeof_variable(ident.clone()) {
-            Some(ty) => ty,
-            None => error_and_return!(
-                #[syntax]
-                (
-                    "the variable \"{}\" isn't declared in the current context.",
-                    ident
-                )
-            ),
-        },
+        Expr::Unary { child, .. } => infer_expr_type(*child.clone()),
+        Expr::Variable { ty, .. } => ty,
         Expr::Cast { into, .. } => into,
     }
 }
@@ -368,7 +361,7 @@ pub fn parse_let(
 
     let ty = match maybe_explicit_type {
         Some(toks) => parse_type(toks.iter(), ctx)?,
-        None => match infer_expr_type(value.clone(), ctx) {
+        None => match infer_expr_type(value.clone()) {
             Type::Unknown => error_and_return!(
                 #[compiler]
                 "the type cannot be infered, consider using casting."
@@ -422,6 +415,20 @@ impl Statement {
             token => Token::Let => {
                //  input.next();
                 return parse_let(input, ctx);
+            },
+            token => Token::Return => {
+                input.next()?;
+                match ctx.can_return{
+                    true => {
+                        let res = Some(Self::Return{ value: Expr::parse(input, ctx)?});
+                        _ = cast!(input.next()?, Token::Semicolon);
+                        return res;
+                    },
+                    false => error_and_return!(
+                        #[syntax] // <-- Not really a syntax error!
+                        "the \"return\" statement isn't allowed in this context."
+                    )
+                }
             },
             Expr::parse(input, ctx) => Some(expr) => {
                 _ = try_cast!(input.next()?, Token::Semicolon)?;

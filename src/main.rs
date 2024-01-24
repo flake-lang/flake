@@ -15,6 +15,7 @@ use parser::TokenStream;
 extern crate inkwell;
 
 mod ast;
+mod codegen;
 mod compile;
 mod lexer;
 mod parser;
@@ -27,7 +28,7 @@ fn main() {
     let code = include_str!("../test.fl");
     let mut context = ast::Context {
         locals: HashMap::new(),
-        can_return: false,
+        can_return: true,
         types: [].into(),
     };
 
@@ -46,18 +47,18 @@ fn main() {
         }
 
         if let Some(ast_node) = ast::Statement::parse(&mut tokens_peekable, &mut context) {
-            // println!("{:#?}", &ast_node);
+            println!("{:#?}", &ast_node);
             //  println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
             statements.push(ast_node);
         }
     }
 
-    println!("{:?}", statements);
-    println!("{:?}", context);
+    println!("{:#?}", statements);
+    println!("{:#?}", context);
 
     // let ast = dbg!(parser::parse_node(&mut tokens_peekable)).expect("Failed to parse syntax tree");
 
-    let mut compiler = compile::Compiler::new();
+    // let mut compiler = compile::Compiler::new();
 
     // compiler.compile_with_prelude_main(vec![ast]);
 }
