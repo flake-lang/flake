@@ -1,1 +1,9 @@
-true == cast[bool] (255 / cast[f32] x)
+let[bool] test = true;
+
+let not_test = !test;
+
+let a = 0;
+
+let b = 2 * a;
+
+let c = cast[__flakec_unknown] b;

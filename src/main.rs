@@ -7,6 +7,8 @@
     slice_pattern
 )]
 
+use std::collections::HashMap;
+
 use lexer::create_lexer;
 use parser::TokenStream;
 
@@ -23,27 +25,35 @@ mod tests;
 
 fn main() {
     let code = include_str!("../test.fl");
+    let mut context = ast::Context {
+        locals: HashMap::new(),
+        can_return: false,
+        types: [].into(),
+    };
 
     let mut tokens = create_lexer(code);
     let mut tokens_peekable = tokens.peekable();
 
-    let mut exprs = Vec::<ast::Expr>::new();
+    let mut statements = Vec::<ast::Statement>::new();
+
+    //  dbg!(ast::Statement::parse(&mut tokens_peekable));
+
+    dbg!(&code);
 
     loop {
-        if tokens_peekable.peek() == Some(&token::Token::Semicolon) {
-            tokens_peekable.next();
+        if tokens_peekable.peek() == Some(&token::Token::EOF) {
+            break;
         }
 
-        if let Some(ast_node) = ast::Expr::parse(&mut tokens_peekable) {
-            println!("{:#?}", &ast_node);
-            println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
-            exprs.push(ast_node);
-        } else {
-            break;
+        if let Some(ast_node) = ast::Statement::parse(&mut tokens_peekable, &mut context) {
+            // println!("{:#?}", &ast_node);
+            //  println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
+            statements.push(ast_node);
         }
     }
 
-    println!("{:#?}", exprs);
+    println!("{:?}", statements);
+    println!("{:?}", context);
 
     // let ast = dbg!(parser::parse_node(&mut tokens_peekable)).expect("Failed to parse syntax tree");
 

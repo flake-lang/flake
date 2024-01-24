@@ -1,7 +1,11 @@
 //! Abstract Syntax Tree Types
 
-use crate::{lexer::TokenLexer, parser, token::Token};
-use std::{any::TypeId, iter::Peekable, ops::Deref};
+use crate::{
+    lexer::TokenLexer,
+    parser::{self, TokenStream},
+    token::Token,
+};
+use std::{any::TypeId, collections::HashMap, iter::Peekable, ops::Deref};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Operator {
@@ -83,6 +87,23 @@ macro_rules! cast {
             $pat($($value),*) => ($($value),*), // #1
             _ => panic!("mismatch variant when cast to {}", stringify!($pat)), // #2
     }}};
+
+ ($target:expr, $pat:path) => {{
+        match $target{
+            $pat => Some(()), // #1
+            _ => panic!("mismatch variant when cast to {}", stringify!($pat)), // #2
+    }}};
+}
+
+macro_rules! error_and_return {
+    (#[$ty:ident] $str:literal) => {{
+        eprintln!("{}: {}", concat!(stringify!($ty), " error"), $str);
+        return Default::default();
+    }};
+    (#[$ty:ident] ($fmt:literal, $($arg:expr),*)) => {{
+        eprintln!("{}: {}", concat!(stringify!($ty), " error"), format!($fmt, $($arg),*));
+        return Default::default();
+    }};
 }
 
 macro_rules! try_cast {
@@ -91,9 +112,19 @@ macro_rules! try_cast {
             $pat($($value),*) => Some(($($value),*)), // #1
             _ => None, // #2
     }}};
+
+
+    ($target:expr, $pat:path) => {{
+        match $target{
+            $pat => Some(()), // #1
+            _ => None, // #2
+    }}};
 }
 
-pub fn parse_cast(input: &mut Peekable<impl Iterator<Item = Token>>) -> Option<Expr> {
+pub fn parse_cast(
+    input: &mut Peekable<impl Iterator<Item = Token>>,
+    ctx: &mut Context,
+) -> Option<Expr> {
     // Syntax: cast[<type>] <expr>
     input.next();
 
@@ -105,7 +136,7 @@ pub fn parse_cast(input: &mut Peekable<impl Iterator<Item = Token>>) -> Option<E
         }
     };
 
-    let target_ty = type_from_str(try_cast!(input.next()?, Token::Identifier, ty)?)?;
+    let target_ty = type_from_str(try_cast!(input.next()?, Token::Identifier, ty)?, ctx)?;
 
     match input.next()? {
         Token::ClosingBracket => {}
@@ -115,7 +146,7 @@ pub fn parse_cast(input: &mut Peekable<impl Iterator<Item = Token>>) -> Option<E
         }
     };
 
-    let expr = Expr::parse(input)?;
+    let expr = Expr::parse(input, ctx)?;
 
     Some(Expr::Cast {
         expr: Box::new(expr),
@@ -124,14 +155,15 @@ pub fn parse_cast(input: &mut Peekable<impl Iterator<Item = Token>>) -> Option<E
 }
 
 impl Expr {
-    pub fn parse(input: &mut Peekable<impl Iterator<Item = Token>>) -> Option<Self> {
+    pub fn parse(
+        input: &mut Peekable<impl Iterator<Item = Token>>,
+        ctx: &mut Context,
+    ) -> Option<Self> {
         let token = input.peek()?;
-
-        dbg!(&token);
 
         if token == &Token::LeftParenthesis {
             input.next();
-            let res = Self::parse(input)?;
+            let res = Self::parse(input, ctx)?;
             input.next();
             return Some(res);
         }
@@ -141,16 +173,17 @@ impl Expr {
                      input.next()?;
                      return Some(if let Some(op) = Operator::from_token(input.peek().map(|v|v.clone())?){
                          input.next()?;
-                         Self::Binary { op, rhs: Box::new(Self::Constant(value)), lhs: Box::new(Self::parse(input)?)}
+                         Self::Binary { op, rhs: Box::new(Self::Constant(value)), lhs: Box::new(Self::parse(input, ctx)?)}
                      }else {
+
                          Self::Constant(value)
                      });
                  },
                  Operator::from_token(token.clone()) => Some(op) => {
                      input.next()?;
-                     return Some(Self::Unary { op, child: Box::new(Self::parse(input)?) });
+                     return Some(Self::Unary { op, child: Box::new(Self::parse(input, ctx)?) });
                  },
-                 token => Token::Cast => return parse_cast(input),
+                 token => Token::Cast => return parse_cast(input, ctx),
                  token => Token::Identifier(ident) => {
                     let ident_cloned = ident.clone();
                     input.next()?;
@@ -164,12 +197,12 @@ impl Expr {
     }
 }
 
-pub fn infer_expr_type(expr: Expr) -> Type {
+pub fn infer_expr_type(expr: Expr, ctx: &mut Context) -> Type {
     match expr {
         Expr::Constant(value) => value.get_type(),
         Expr::Binary { rhs, lhs, .. } => {
-            let right_ty = infer_expr_type(*rhs.clone());
-            let left_ty = infer_expr_type(*lhs.clone());
+            let right_ty = infer_expr_type(*rhs.clone(), ctx);
+            let left_ty = infer_expr_type(*lhs.clone(), ctx);
 
             if right_ty != left_ty {
                 Type::Unknown
@@ -177,27 +210,48 @@ pub fn infer_expr_type(expr: Expr) -> Type {
                 left_ty
             }
         }
-        Expr::Unary { child, .. } => infer_expr_type(*child.clone()),
-        Expr::Variable { .. } => Type::Unknown,
+        Expr::Unary { child, .. } => infer_expr_type(*child.clone(), ctx),
+        Expr::Variable { ident } => match ctx.typeof_variable(ident.clone()) {
+            Some(ty) => ty,
+            None => error_and_return!(
+                #[syntax]
+                (
+                    "the variable \"{}\" isn't declared in the current context.",
+                    ident
+                )
+            ),
+        },
         Expr::Cast { into, .. } => into,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Type {
     Boolean,
-    UnsignedInt { bits: u8 },
-    Int { bits: u8 },
+    UnsignedInt {
+        bits: u8,
+    },
+    Int {
+        bits: u8,
+    },
     String,
-    Float { bits: u8 },
-    Array { len: usize, item_ty: Box<Type> },
-    Pointee { target_ty: Box<Type> },
+    Float {
+        bits: u8,
+    },
+    Array {
+        len: usize,
+        item_ty: Box<Type>,
+    },
+    Pointee {
+        target_ty: Box<Type>,
+    },
     Void,
     Never,
+    #[default]
     Unknown,
 }
 
-pub fn type_from_str(s: String) -> Option<Type> {
+pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
     match s.as_str() {
         "u32" => Some(Type::UnsignedInt { bits: 32 }),
         "u16" => Some(Type::UnsignedInt { bits: 16 }),
@@ -208,15 +262,17 @@ pub fn type_from_str(s: String) -> Option<Type> {
         "f32" => Some(Type::Float { bits: 32 }),
         "never" => Some(Type::Never),
         "__flakec_unknown" => Some(Type::Unknown),
-        "str" => Some(Type::String),
-        "void" => Some(Type::Void),
-        "f32" => Some(Type::Float { bits: 32 }),
-        "never" => Some(Type::Never),
-        "__flakec_unknown" => Some(Type::Unknown),
-        _ => None,
+        _ => match ctx.try_get_type(s.clone()) {
+            Some(ty) => Some(ty),
+            None => error_and_return!(
+                #[syntax]
+                ("the type {} cannot be would in the current context.", s)
+            ),
+        },
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum Statement {
     Return {
         value: Expr,
@@ -226,6 +282,155 @@ pub enum Statement {
         ident: String,
         value: Expr,
     },
+    Expression(Expr),
+}
+
+pub fn parse_raw_params(input: &mut Peekable<impl Iterator<Item = Token>>) -> Option<Vec<Token>> {
+    // Raw Param Syntax:  [ <...> ]
+
+    if try_cast!(input.peek()?, Token::OpeningBracket).is_some() {
+        input.next();
+    } else {
+        return None;
+    }
+
+    let mut brackets = 1;
+    let mut collected = Vec::<Token>::new();
+
+    loop {
+        if brackets == 0 {
+            break;
+        }
+
+        let token = input.peek()?;
+
+        match token {
+            Token::OpeningBracket => {
+                brackets += 1;
+            }
+            Token::ClosingBracket => {
+                brackets -= 1;
+            }
+            Token::EOF => error_and_return!(
+                #[parser]
+                "unexpected end of file"
+            ),
+            _ => collected.push(token.clone()),
+        };
+
+        input.next();
+    }
+
+    Some(collected)
+}
+
+pub fn parse_type<'a>(input: impl Iterator<Item = &'a Token>, ctx: &mut Context) -> Option<Type> {
+    let mut input = input;
+    let ident = match try_cast!(input.next()?, Token::Identifier, ident) {
+        Some(ident) => ident,
+        None => error_and_return!(
+            #[parser]
+            "expected type identifier."
+        ),
+    };
+
+    return match type_from_str(ident.clone().clone(), ctx) {
+        Some(ty) => Some(ty),
+        None => error_and_return!(
+            #[syntax]
+            (
+                "the type \"{}\" cannot be found in the current context",
+                ident
+            )
+        ),
+    };
+}
+
+pub fn parse_let(
+    input: &mut Peekable<impl Iterator<Item = Token>>,
+    ctx: &mut Context,
+) -> Option<Statement> {
+    // Syntax:
+    // - let <name> = <value>; <-- Implicit Type
+    // - let[<type>] <name> = <value> <-- Explicit Type
+
+    input.next()?; // Skip [Let] token.
+
+    let maybe_explicit_type = parse_raw_params(input);
+
+    let ident = try_cast!(input.next()?, Token::Identifier, ident)?;
+
+    _ = try_cast!(input.next()?, Token::Equals)?;
+
+    let value = Expr::parse(input, ctx)?;
+
+    _ = try_cast!(input.next()?, Token::Semicolon)?;
+
+    let ty = match maybe_explicit_type {
+        Some(toks) => parse_type(toks.iter(), ctx)?,
+        None => match infer_expr_type(value.clone(), ctx) {
+            Type::Unknown => error_and_return!(
+                #[compiler]
+                "the type cannot be infered, consider using casting."
+            ),
+            ty => ty,
+        },
+    };
+
+    ctx.register_local_variable(ident.clone(), ty.clone() as VarMeta);
+
+    Some(Statement::Let {
+        ty,
+        ident,
+        value: value.clone(),
+    })
+}
+
+pub type VarMeta = Type;
+
+#[derive(Debug, Clone)]
+pub struct Context {
+    pub locals: HashMap<String, VarMeta>,
+    pub can_return: bool,
+    pub types: HashMap<String, Type>,
+}
+
+impl Context {
+    pub fn typeof_variable(&mut self, ident: String) -> Option<Type> {
+        let meta = self.locals.get(&ident)?;
+
+        Some(meta.clone() as Type)
+    }
+
+    pub fn try_get_type(&mut self, name: String) -> Option<Type> {
+        self.types.get(&name).cloned()
+    }
+
+    pub fn register_local_variable(&mut self, name: String, ty: Type) -> Option<Type> {
+        self.locals.insert(name, ty)
+    }
+}
+
+impl Statement {
+    pub fn parse(
+        input: &mut Peekable<impl Iterator<Item = Token>>,
+        ctx: &mut Context,
+    ) -> Option<Self> {
+        let token = input.peek()?;
+
+        match_exprs! {
+            token => Token::Let => {
+               //  input.next();
+                return parse_let(input, ctx);
+            },
+            Expr::parse(input, ctx) => Some(expr) => {
+                _ = try_cast!(input.next()?, Token::Semicolon)?;
+                return Some(Self::Expression(expr));
+            }
+        };
+
+        None
+    }
 }
 
 #[derive(Clone, Debug)]

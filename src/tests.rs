@@ -48,6 +48,7 @@ pub mod lexer {
     }
 }
 
+/*
 mod parser {
     use crate::parser::*;
 
@@ -71,3 +72,4 @@ mod parser {
         todo!()
     }
 }
+*/
