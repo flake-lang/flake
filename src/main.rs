@@ -48,6 +48,32 @@ fn main() {
         notes: vec!["abc".to_owned(), "123".to_owned()],
     });*/
 
+    /*  pipeline_send!(
+            #[Error]
+            "This is an error!",
+            "You can write more about it here...",
+            "even in multiple lines!"
+        );
+    */
+    pipeline_send!(
+        #[Warning]
+        "This is an warning!",
+        "You can write more about it here...",
+        "even in multiple lines!"
+    );
+
+    pipeline_send!(
+        #[Info]
+        "This is an information!",
+        "You can write more about it here...",
+        "even in multiple lines!"
+    );
+    /*  pipeline_send!(
+        #[_Unimplemented]
+        "unimplemented!!",
+        "... will panic!"
+    ); */
+
     loop {
         if tokens_peekable.peek() == Some(&token::Token::EOF) {
             break;

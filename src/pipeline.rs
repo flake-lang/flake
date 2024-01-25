@@ -9,24 +9,64 @@ pub struct MessagePipeline {
     pub project_name: &'static str,
 }
 
+#[derive(Debug)]
 pub enum Message {
-    Error { err: String, notes: Vec<String> },
+    Error { msg: String, notes: Vec<String> },
+    Warning { msg: String, notes: Vec<String> },
+    Info { msg: String, notes: Vec<String> },
+    Raw { msg: String, notes: Vec<String> },
+    Panic { msg: String, notes: Vec<String> },
+    _Unimplemented { msg: String, notes: Vec<String> },
+}
+
+#[inline(always)]
+pub(self) fn display_message(
+    _pipeline: &MessagePipeline,
+    kinda: colored::ColoredString,
+    msg: String,
+    notes: Vec<String>,
+) {
+    use colored::Colorize as _;
+    eprintln!(
+        "{}: {}\n {} {}:{}\n{}",
+        kinda,
+        msg.white().bold(),
+        "-->".blue(),
+        _pipeline.file_path,
+        _pipeline
+            .current_line
+            .load(std::sync::atomic::Ordering::Relaxed),
+        notes.join("\n")
+    );
 }
 
 impl MessagePipeline {
     pub fn process_message(&self, msg: Message) {
+        use colored::Colorize as _;
         match msg {
-            Message::Error { err, notes } => {
-                eprintln!(
-                    "error: {}\n-> {}:{}\n{}",
-                    err,
-                    self.file_path,
-                    self.current_line.load(std::sync::atomic::Ordering::Relaxed),
-                    notes.join("\n")
-                );
+            Message::Error { msg, notes } => {
+                display_message(self, "error".red().bold(), msg, notes);
                 self.errors
                     .fetch_add(1, std::sync::atomic::Ordering::Release);
             }
+            Message::Warning { msg, notes } => {
+                display_message(self, "warning".yellow().bold(), msg, notes);
+                self.warnings
+                    .fetch_add(1, std::sync::atomic::Ordering::Release);
+            }
+            Message::Info { msg, notes } => {
+                display_message(self, "info".cyan().bold(), msg, notes);
+                self.other
+                    .fetch_add(1, std::sync::atomic::Ordering::Release);
+            }
+            Message::Raw { msg, notes } => match msg.as_str() {
+                "user" => println!("[Pipeline::Raw(user)] {}", notes.join("\n")),
+                _ => eprintln!("[Pipeline::Raw] {}", notes.join("\n")),
+            },
+            Message::Panic { msg, notes } => {
+                panic!("[Pipeline::Panic] {}{}", msg, notes.join("\n"))
+            }
+            _ => panic!("failed to process message in pipeline"),
         }
     }
 
