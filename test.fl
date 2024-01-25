@@ -1,5 +1,5 @@
 
-let[invalid] a = 0;
+let[u32] a = 0;
 
 type u8 = __flakec_builtin;
 type u16 = __flakec_builtin;

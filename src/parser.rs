@@ -1,5 +1,5 @@
 //! Parser(Tokens -> Abstract Syntax Tree)
-
+/*
 use std::iter::Peekable;
 
 use inkwell::support::enable_llvm_pretty_stack_trace;
@@ -68,3 +68,6 @@ pub fn parse_node(input: &mut Peekable<impl Iterator<Item = Token>>) -> Result<a
         }
     }
 }
+*/
+
+pub type TokenStream = ();

@@ -36,7 +36,7 @@ fn main() {
     let mut tokens = create_lexer(code);
     let mut tokens_peekable = tokens.peekable();
 
-    let mut statements = Vec::<ast::Statement>::new();
+    let mut statements = Vec::<ast::Node>::new();
 
     //  dbg!(ast::Statement::parse(&mut tokens_peekable));
 
@@ -79,7 +79,7 @@ fn main() {
             break;
         }
 
-        if let Some(ast_node) = ast::Statement::parse(&mut tokens_peekable, &mut context) {
+        if let Some(ast_node) = ast::parse_node(&mut tokens_peekable, &mut context) {
             //   println!("{:#?}", &ast_node);
             //  println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
             statements.push(ast_node);

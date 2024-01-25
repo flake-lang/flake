@@ -33,21 +33,14 @@ impl Operator {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Node {
-    Int(i64),
-    Boolean(bool),
-    String(String),
-    UnaryExpr {
-        op: Operator,
-        child: Box<Node>,
-    },
-    BinaryExpr {
-        op: Operator,
-        lhs: Box<Node>,
-        rhs: Box<Node>,
-    },
+    Expr(Expr),
+    Stmt(Statement),
+    Item(Item),
 }
+
+pub type AST = (String, Vec<Node>);
 
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -329,11 +322,37 @@ pub enum Statement {
         ident: String,
         value: Expr,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum Item {
     TypeAlias {
         name: String,
         target: Type,
     },
-    Expression(Expr),
+    Module {
+        name: String,
+        is_transparent: bool,
+        content: Vec<Node>,
+    },
+    GlobalVariable {
+        name: String,
+        ty: Type,
+    },
+}
+
+impl Item {
+    pub fn parse(
+        input: &mut Peekable<impl Iterator<Item = Token>>,
+        ctx: &mut Context,
+    ) -> Option<Item> {
+        let token = input.peek()?;
+
+        match token {
+            Token::TypeAlias => return parse_type_alias(input, ctx),
+            _ => return None,
+        }
+    }
 }
 
 pub fn parse_raw_params(input: &mut Peekable<impl Iterator<Item = Token>>) -> Option<Vec<Token>> {
@@ -472,7 +491,7 @@ impl Context {
 pub fn parse_type_alias(
     input: &mut Peekable<impl Iterator<Item = Token>>,
     ctx: &mut Context,
-) -> Option<Statement> {
+) -> Option<Item> {
     input.next()?; // Skip "type" token.
 
     let ident = try_cast!(input.next()?, Token::Identifier, ident)?;
@@ -490,7 +509,7 @@ pub fn parse_type_alias(
 
     ctx.register_type_alias(ident.clone(), target.clone());
 
-    Some(Statement::TypeAlias {
+    Some(Item::TypeAlias {
         name: ident,
         target,
     })
@@ -521,16 +540,24 @@ impl Statement {
                         "the \"return\" statement isn't allowed in this context."
                     )
                 }
-            },
-            token => Token::TypeAlias => return parse_type_alias(input, ctx),
-            Expr::parse(input, ctx) => Some(expr) => {
-                _ = try_cast!(input.next()?, Token::Semicolon)?;
-                return Some(Self::Expression(expr));
             }
         };
 
         None
     }
+}
+
+pub fn parse_node(
+    input: &mut Peekable<impl Iterator<Item = Token>>,
+    ctx: &mut Context,
+) -> Option<Node> {
+    match_exprs! {
+        Item::parse(input, ctx) => Some(item) => return Some(Node::Item(item)),
+        Statement::parse(input, ctx) => Some(stmt) => return  Some(Node::Stmt(stmt)),
+        Expr::parse(input, ctx) => Some(expr) => return Some(Node::Expr(expr))
+    }
+
+    None
 }
 
 #[derive(Clone, Debug)]
