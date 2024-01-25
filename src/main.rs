@@ -7,7 +7,7 @@
     slice_pattern
 )]
 
-use std::collections::HashMap;
+use std::{collections::HashMap, process::exit};
 
 use lexer::create_lexer;
 use parser::TokenStream;
@@ -19,6 +19,7 @@ mod codegen;
 mod compile;
 mod lexer;
 mod parser;
+mod pipeline;
 mod token;
 
 #[cfg(test)]
@@ -39,7 +40,13 @@ fn main() {
 
     //  dbg!(ast::Statement::parse(&mut tokens_peekable));
 
-    dbg!(&code);
+    /*  pipeline::COMPILER_PIPELINE
+    .read()
+    .unwrap()
+    .process_message(pipeline::Message::Error {
+        err: "test".to_owned(),
+        notes: vec!["abc".to_owned(), "123".to_owned()],
+    });*/
 
     loop {
         if tokens_peekable.peek() == Some(&token::Token::EOF) {
@@ -47,10 +54,26 @@ fn main() {
         }
 
         if let Some(ast_node) = ast::Statement::parse(&mut tokens_peekable, &mut context) {
-            println!("{:#?}", &ast_node);
+            //   println!("{:#?}", &ast_node);
             //  println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
             statements.push(ast_node);
         }
+    }
+
+    if pipeline::COMPILER_PIPELINE
+        .read()
+        .unwrap()
+        .needs_terminate()
+    {
+        eprintln!(
+            "Failed to compile program due to {} errors!",
+            pipeline::COMPILER_PIPELINE
+                .read()
+                .unwrap()
+                .errors
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        exit(1);
     }
 
     println!("{:#?}", statements);

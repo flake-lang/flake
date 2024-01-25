@@ -8,3 +8,5 @@ type bool = __flakec_builtin;
 type str = __flakec_builtin; 
 type void = __flakec_builtin;
 type never = __flakec_builtin;
+
+let[a;
