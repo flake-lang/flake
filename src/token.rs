@@ -35,5 +35,8 @@ pub enum Token {
     Return,
     Cast,
     TypeAlias,
+    Mod,
     EOF,
+    /// Example: generic.ext-token.sized
+    _ViaIdent(&'static str),
 }

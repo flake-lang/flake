@@ -133,10 +133,17 @@ macro_rules! error_and_return {
 }
 
 #[inline(always)]
-pub fn expect_token(input: &mut impl Iterator<Item = Token>, token: Token) -> Option<()> {
+pub fn expect_token(input: &mut impl Iterator<Item = Token>, token: Token) -> Option<Token> {
     let tok = input.next()?;
 
-    None
+    match tok.clone() {
+        token => Some(tok),
+        _ => error_and_return!(
+            #[Error]
+            "Unexpected token in input.",
+            ("Expected token {:?} found {:?}!", token, tok)
+        ),
+    }
 }
 
 macro_rules! try_cast {
@@ -333,12 +340,14 @@ pub enum Item {
     Module {
         name: String,
         is_transparent: bool,
-        content: Vec<Node>,
+        tree: Vec<Node>,
+        context: Context,
     },
     GlobalVariable {
         name: String,
         ty: Type,
     },
+    InlinedBlock(Block),
 }
 
 impl Item {
@@ -348,11 +357,39 @@ impl Item {
     ) -> Option<Item> {
         let token = input.peek()?;
 
+        dbg!(&token);
+
         match token {
             Token::TypeAlias => return parse_type_alias(input, ctx),
+            Token::Mod => return parse_mod(input, ctx),
+            Token::_ViaIdent("internal.keyword.inlined-block") => {
+                return Some(Item::InlinedBlock(parse_block(input, ctx, true)?))
+            }
             _ => return None,
         }
     }
+}
+
+pub fn parse_mod(
+    input: &mut Peekable<impl Iterator<Item = Token>>,
+    ctx: &mut Context,
+) -> Option<Item> {
+    // Syntax: mod <name> { ... };
+
+    _ = expect_token(input, Token::Mod)?; // ...double check... ;)
+
+    let ident = try_cast!(input.next()?, Token::Identifier, ident)?;
+
+    let block = parse_block(input, ctx, false)?;
+
+    _ = expect_token(input, Token::Semicolon)?;
+
+    Some(Item::Module {
+        name: ident,
+        is_transparent: false,
+        tree: block.0,
+        context: block.1,
+    })
 }
 
 pub fn parse_raw_params(input: &mut Peekable<impl Iterator<Item = Token>>) -> Option<Vec<Token>> {
@@ -558,6 +595,65 @@ pub fn parse_node(
     }
 
     None
+}
+
+/// Code Block (List of Statements)
+/// ===========
+///
+/// # Syntax:
+/// `{ ... }`
+///
+/// # Parsing
+/// See [parse_block] function.
+type Block = (Vec<Node>, Context);
+
+pub fn parse_block(
+    input: &mut Peekable<impl Iterator<Item = Token>>,
+    ctx: &mut Context,
+    is_param: bool,
+) -> Option<Block> {
+    if is_param {
+        input.next()?;
+    }
+
+    _ = expect_token(input, Token::LeftBrace)?;
+
+    let mut stmts = Vec::<Node>::new();
+
+    let mut braces = 1;
+
+    let mut new_ctx = ctx.clone();
+
+    loop {
+        if braces <= 0 {
+            break;
+        }
+
+        dbg!(braces);
+
+        let token = input.peek()?;
+
+        dbg!(&token);
+
+        match token {
+            Token::LeftBrace => braces += 1,
+            Token::RightBrace => braces -= 1,
+            _ => match parse_node(input, &mut new_ctx) {
+                Some(stmt) => {
+                    stmts.push(dbg!(stmt));
+                    continue;
+                }
+                None => error_and_return!(
+                    #[Error]
+                    "Failed to parse statement."
+                ),
+            },
+        };
+
+        input.next();
+    }
+
+    Some((stmts, new_ctx))
 }
 
 #[derive(Clone, Debug)]

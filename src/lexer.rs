@@ -59,9 +59,11 @@ pub fn try_lex_keyword(s: String) -> Option<Token> {
         "let" => Some(Token::Let),
         "return" => Some(Token::Return),
         "cast" => Some(Token::Cast),
+        "mod" => Some(Token::Mod),
         "true" => Some(Token::Boolean(true)),
         "false" => Some(Token::Boolean(false)),
         "type" => Some(Token::TypeAlias),
+        "__flakec_inlined_block" => Some(dbg!(Token::_ViaIdent("internal.keyword.inlined-block"))),
         _ => None,
     }
 }
@@ -147,7 +149,7 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::Token> + '
             let chr = peek_or_break!(input);
 
             match chr {
-                ' ' | '\n' => {
+                ' ' | '\n' | '\t' => {
                     input.next();
                     continue;
                 }
