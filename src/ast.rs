@@ -1,13 +1,14 @@
 //! Abstract Syntax Tree Types
 
 use crate::{
+    feature::{FeatureGate, FeatureKind},
     lexer::TokenLexer,
     parser::{self, TokenStream},
     token::Token,
 };
 use std::{any::TypeId, collections::HashMap, iter::Peekable, ops::Deref};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum Operator {
     Plus,
     Minus,
@@ -33,7 +34,7 @@ impl Operator {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Node {
     Expr(Expr),
     Stmt(Statement),
@@ -42,7 +43,7 @@ pub enum Node {
 
 pub type AST = (String, Vec<Node>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     Constant(Value),
     Binary {
@@ -265,7 +266,7 @@ pub fn infer_expr_type(expr: Expr) -> Type {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Type {
     Boolean,
     UnsignedInt {
@@ -319,7 +320,7 @@ pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Statement {
     Return {
         value: Expr,
@@ -331,7 +332,7 @@ pub enum Statement {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Item {
     TypeAlias {
         name: String,
@@ -362,10 +363,17 @@ impl Item {
         match token {
             Token::TypeAlias => return parse_type_alias(input, ctx),
             Token::Mod => return parse_mod(input, ctx),
-            Token::_ViaIdent("internal.keyword.inlined-block") => {
+            /* Token::_ViaIdent("internal.keyword.inlined-block") => {
                 return Some(Item::InlinedBlock(parse_block(input, ctx, true)?))
+            }*/
+            _ => {
+                pipeline_send!(
+                    #[Warning]
+                    "invalid item, trying to skip token."
+                );
+                input.next();
+                return None;
             }
-            _ => return None,
         }
     }
 }
@@ -498,11 +506,12 @@ pub fn parse_let(
 
 pub type VarMeta = Type;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Context {
     pub locals: HashMap<String, VarMeta>,
     pub can_return: bool,
     pub types: HashMap<String, Type>,
+    pub feature_gates: HashMap<String, FeatureGate>,
 }
 
 impl Context {
@@ -522,6 +531,29 @@ impl Context {
 
     pub fn register_type_alias(&mut self, name: String, target: Type) -> Option<Type> {
         self.types.insert(name, target)
+    }
+
+    pub fn check_feature_gate(&mut self, feature: &'_ str) -> bool {
+        let feature_gate = match self.feature_gates.get(&feature.to_string()) {
+            Some(f) => f,
+            None => {
+                pipeline_send!(
+                    #[Error]
+                    ("The feature {} doesn't exist.", feature)
+                );
+                return false;
+            }
+        };
+
+        if feature_gate.1 == FeatureKind::Internal {
+            pipeline_send!(
+                #[Warning]
+                ("Use of internal feature {}.", feature),
+                "Using Internal feature is not recommended!"
+            );
+        }
+
+        feature_gate.0
     }
 }
 
@@ -644,7 +676,7 @@ pub fn parse_block(
                     continue;
                 }
                 None => error_and_return!(
-                    #[Error]
+                    #[Info]
                     "Failed to parse statement."
                 ),
             },
@@ -656,7 +688,7 @@ pub fn parse_block(
     Some((stmts, new_ctx))
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Value(Token);
 
 impl Value {

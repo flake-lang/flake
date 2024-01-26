@@ -11,3 +11,12 @@ type str = __flakec_builtin;
 type void = __flakec_builtin;
 type never = __flakec_builtin;
 };
+
+
+type compiler_version = u32;;
+let[compiler_version] COMPILER_VERSION = 001;
+
+let[str] message = "
+Hello, World!
+SECRET: FL023!
+";

@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 #[non_exhaustive]
 pub enum Token {
@@ -38,5 +38,5 @@ pub enum Token {
     Mod,
     EOF,
     /// Example: generic.ext-token.sized
-    _ViaIdent(&'static str),
+    _ViaIdent(String),
 }

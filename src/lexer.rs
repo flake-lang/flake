@@ -63,7 +63,9 @@ pub fn try_lex_keyword(s: String) -> Option<Token> {
         "true" => Some(Token::Boolean(true)),
         "false" => Some(Token::Boolean(false)),
         "type" => Some(Token::TypeAlias),
-        "__flakec_inlined_block" => Some(dbg!(Token::_ViaIdent("internal.keyword.inlined-block"))),
+        "__flakec_inlined_block" => Some(dbg!(Token::_ViaIdent(
+            "internal.keyword.inlined-block".to_owned()
+        ))),
         _ => None,
     }
 }

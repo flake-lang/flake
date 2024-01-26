@@ -17,6 +17,7 @@ extern crate inkwell;
 mod ast;
 mod codegen;
 mod compile;
+mod feature;
 mod lexer;
 mod parser;
 mod pipeline;
@@ -31,6 +32,11 @@ fn main() {
         locals: HashMap::new(),
         can_return: true,
         types: [].into(),
+        feature_gates: {
+            use feature::FeatureKind::*;
+
+            HashMap::from(include!("../features.specs"))
+        },
     };
 
     let mut tokens = create_lexer(code);
@@ -104,6 +110,18 @@ fn main() {
 
     println!("{:#?}", statements);
     println!("{:#?}", context);
+
+    let serilaized = format!(
+        "{}",
+        serde_json::to_string(&serde_json::json! ({
+            "tree": statements,
+            "context": context,
+            "is_transparent": false
+        }))
+        .unwrap()
+    );
+
+    std::fs::write("test.fl.json", serilaized);
 
     // let ast = dbg!(parser::parse_node(&mut tokens_peekable)).expect("Failed to parse syntax tree");
 
