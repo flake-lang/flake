@@ -6,7 +6,10 @@ use crate::{
     parser::{self, TokenStream},
     token::Token,
 };
-use std::{any::TypeId, collections::HashMap, iter::Peekable, ops::Deref};
+use std::{
+    any::TypeId, collections::HashMap, iter::Peekable, ops::Deref, str::Matches,
+    sync::mpsc::RecvTimeoutError,
+};
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum Operator {
@@ -39,6 +42,7 @@ pub enum Node {
     Expr(Expr),
     Stmt(Statement),
     Item(Item),
+    GlobalMarker { name: String, args: Vec<Value> },
 }
 
 pub type AST = (String, Vec<Node>);
@@ -103,6 +107,7 @@ macro_rules! pipeline_send{
         $msg:tt,
         $($note:tt),*
     ) => {{
+        #[allow(unused_imports)]
         use colored::Colorize as _;
         crate::pipeline::COMPILER_PIPELINE.read().expect("message pipeline locked")
             .process_message(crate::pipeline::Message::$ty{
@@ -126,10 +131,11 @@ macro_rules! pipeline_send{
     }};
 }
 
+#[macro_export]
 macro_rules! error_and_return {
     ($($passed:tt)*) => {{
         pipeline_send!($($passed)*);
-        return None;
+        return Default::default();
     }};
 }
 
@@ -321,6 +327,74 @@ pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+enum ItemMeta {
+    Marker(String, Vec<Value>),
+    Documentation(String),
+}
+
+pub fn split_and_parse_args_1(raw: Vec<Token>) -> Option<Vec<Value>> {
+    // V1 Syntax: [<value>, ...]
+
+    let mut values: Vec<Value> = vec![];
+
+    for token in raw.iter() {
+        match Value::new(token) {
+            Some(val) => values.push(val),
+            None => error_and_return!(
+                #[Error]
+                ("expected constant value, found token {:?}.", token),
+                "note: In V1 Argument Lists only constant are allowed, no expressions!"
+            ),
+        }
+    }
+
+    Some(values)
+}
+
+pub fn parse_marker(
+    input: &mut Peekable<impl Iterator<Item = Token>>,
+    ctx: &mut Context,
+    global: bool,
+) -> Option<(String, Vec<Value>)> {
+    _ = if !global {
+        try_cast!(input.peek()?, Token::At)?
+    } else {
+        try_cast!(input.peek()?, Token::DoubleAt)?
+    };
+    input.next();
+
+    let name = try_cast!(input.next()?, Token::Identifier, ident)?;
+
+    let args = match parse_raw_params(input) {
+        Some(params) => split_and_parse_args_1(params)?,
+        None => vec![],
+    };
+
+    Some((name, args))
+}
+
+pub fn parse_item_meta_continous(
+    input: &mut Peekable<impl Iterator<Item = Token>>,
+    ctx: &mut Context,
+) -> Option<(Item, Vec<ItemMeta>)> {
+    // let token = input.peek()?;
+
+    let mut metas = Vec::<ItemMeta>::new();
+
+    loop {
+        match_exprs! {
+            parse_marker(input, ctx, false) => Some(marker) => metas.push(ItemMeta::Marker(marker.0, marker.1)),
+            Item::parse(input, ctx) => Some(item) => {
+                return Some((item, metas));
+            }
+        // error_and_return!(#[Error] "Invalid meta for item.")
+        }
+    }
+
+    None
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Statement {
     Return {
         value: Expr,
@@ -349,6 +423,10 @@ pub enum Item {
         ty: Type,
     },
     InlinedBlock(Block),
+    #[serde(untagged)]
+    _Disabled,
+    #[serde(skip, untagged)]
+    _Global,
 }
 
 impl Item {
@@ -357,8 +435,6 @@ impl Item {
         ctx: &mut Context,
     ) -> Option<Item> {
         let token = input.peek()?;
-
-        dbg!(&token);
 
         match token {
             Token::TypeAlias => return parse_type_alias(input, ctx),
@@ -506,12 +582,23 @@ pub fn parse_let(
 
 pub type VarMeta = Type;
 
+#[derive(Debug, Clone)]
+pub enum MarkerImpl {
+    BuiltIn(BuiltinMarkerFunc),
+}
+
+use crate::builtins;
+pub(crate) type BuiltinMarkerFunc =
+    for<'item, 'ctx> fn(&'item mut Item, &'ctx mut Context, Vec<Value>);
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Context {
     pub locals: HashMap<String, VarMeta>,
     pub can_return: bool,
     pub types: HashMap<String, Type>,
     pub feature_gates: HashMap<String, FeatureGate>,
+    #[serde(skip)]
+    pub markers: HashMap<String, MarkerImpl>,
 }
 
 impl Context {
@@ -519,6 +606,59 @@ impl Context {
         let meta = self.locals.get(&ident)?;
 
         Some(meta.clone() as Type)
+    }
+
+    pub fn apply_item_meta(&mut self, item: &mut Item, meta: ItemMeta) {
+        match meta {
+            ItemMeta::Marker(name, args) => {
+                let marker_impl = match self.markers.get(&name) {
+                    Some(_impl) => _impl,
+                    None => error_and_return!(
+                        #[Error]
+                        (
+                            "The marker {:?} doesn't exist in this context.",
+                            name.clone().trim_start_matches("__global_")
+                        )
+                    ),
+                };
+
+                match marker_impl {
+                    &MarkerImpl::BuiltIn(func) => func(item, self, args),
+                    _ => unimplemented!(),
+                }
+            }
+            _ => unimplemented!(),
+        }
+    }
+
+    pub fn toggle_feature_gate(&mut self, name: &'_ str) {
+        let state = self.feature_gates.get(&name.to_string()).cloned();
+        match state {
+            Some((false, kind)) => {
+                self.feature_gates
+                    .insert(name.to_owned(), (true, kind.clone()));
+
+                if kind == FeatureKind::Internal {
+                    pipeline_send!(
+                        #[Warning]
+                        ("Use of internal feature {:?}.", name),
+                        "Using Internal feature is not recommended!"
+                    );
+                }
+            }
+            Some((true, _)) => pipeline_send!(
+                #[Warning]
+                ("tried to enable already enabled feature {:?}.", name),
+                "action: ignored"
+            ),
+            None => {
+                pipeline_send!(
+                    #[Error]
+                    ("The feature {} doesn't exist.", name)
+                );
+                return;
+            }
+        };
     }
 
     pub fn try_get_type(&mut self, name: String) -> Option<Type> {
@@ -621,7 +761,26 @@ pub fn parse_node(
     ctx: &mut Context,
 ) -> Option<Node> {
     match_exprs! {
-        Item::parse(input, ctx) => Some(item) => return Some(Node::Item(item)),
+        input.peek() => Some(Token::DoubleAt) => {
+            let marker = parse_marker(input, ctx, true)?;
+
+            let  marker_cloned = marker.clone();
+
+            let mut _tmp = Item::_Global;
+
+            Context::apply_item_meta(ctx, &mut _tmp, ItemMeta::Marker(["__global_", marker.0.as_str()].concat(), marker.1));
+
+            return Some(Node::GlobalMarker { name: marker_cloned.0, args:  marker_cloned.1 });
+        },
+        parse_item_meta_continous(input, ctx) => Some((item, metas)) => {
+            let mut output = item;
+
+            for meta in metas{
+                Context::apply_item_meta(ctx, &mut output, meta);
+            }
+
+            return Some(Node::Item(output))
+        },
         Statement::parse(input, ctx) => Some(stmt) => return  Some(Node::Stmt(stmt)),
         Expr::parse(input, ctx) => Some(expr) => return Some(Node::Expr(expr))
     }
@@ -661,18 +820,14 @@ pub fn parse_block(
             break;
         }
 
-        dbg!(braces);
-
         let token = input.peek()?;
-
-        dbg!(&token);
 
         match token {
             Token::LeftBrace => braces += 1,
             Token::RightBrace => braces -= 1,
             _ => match parse_node(input, &mut new_ctx) {
                 Some(stmt) => {
-                    stmts.push(dbg!(stmt));
+                    stmts.push(stmt);
                     continue;
                 }
                 None => error_and_return!(

@@ -1,20 +1,29 @@
+#![allow(warnings)]
 #![feature(
     coroutines,
     iter_from_coroutine,
     coroutine_trait,
     generic_arg_infer,
     exclusive_range_pattern,
-    slice_pattern
+    slice_pattern,
+    proc_macro_hygiene,
+    stmt_expr_attributes
 )]
+
+#[macro_use]
+extern crate macros;
 
 use std::{collections::HashMap, process::exit};
 
 use lexer::create_lexer;
 use parser::TokenStream;
 
+use crate::ast::MarkerImpl;
+
 extern crate inkwell;
 
-mod ast;
+pub mod ast;
+pub mod builtins;
 mod codegen;
 mod compile;
 mod feature;
@@ -37,6 +46,11 @@ fn main() {
 
             HashMap::from(include!("../features.specs"))
         },
+        markers: HashMap::from_iter(
+            builtins::MARKERS
+                .iter()
+                .map(|(n, f)| ((*n).to_owned(), ast::MarkerImpl::BuiltIn(*f))),
+        ),
     };
 
     let mut tokens = create_lexer(code);

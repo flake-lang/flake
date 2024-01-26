@@ -1,5 +1,4 @@
-
-
+@transparent
 mod primitive{
 type u8 = __flakec_builtin;
 type u16 = __flakec_builtin;
@@ -13,10 +12,7 @@ type never = __flakec_builtin;
 };
 
 
-type compiler_version = u32;;
-let[compiler_version] COMPILER_VERSION = 001;
-
-let[str] message = "
-Hello, World!
-SECRET: FL023!
-";
+@feature["flakec-private"]
+mod __private{
+	type __unknown = __flakec_unknown;
+};

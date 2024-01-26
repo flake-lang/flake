@@ -31,6 +31,7 @@ impl TokenLexer for Token {
         match (self, chr) {
             (Token::String(_), _) | (Token::Number(_), _) => unimplemented!(),
             (Token::Equals, '=') => Some(Token::DoubleEquals),
+            (Token::At, '@') => Some(Token::DoubleAt),
             _ => None,
         }
     }
@@ -168,6 +169,7 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::Token> + '
                 ')' => yield lex_token(Token::RightParenthesis, &mut input),
                 '>' => yield lex_token(Token::GreaterThan, &mut input),
                 '<' => yield lex_token(Token::LessThan, &mut input),
+                '@' => yield lex_token(Token::At, &mut input),
                 '[' => yield lex_token(Token::OpeningBracket, &mut input),
                 ']' => yield lex_token(Token::ClosingBracket, &mut input),
                 '{' => yield lex_token(Token::LeftBrace, &mut input),

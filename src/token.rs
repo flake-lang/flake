@@ -32,6 +32,8 @@ pub enum Token {
     Comma,
     Semicolon,
     Let,
+    At,
+    DoubleAt,
     Return,
     Cast,
     TypeAlias,
