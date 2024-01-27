@@ -7,7 +7,8 @@
     exclusive_range_pattern,
     slice_pattern,
     proc_macro_hygiene,
-    stmt_expr_attributes
+    stmt_expr_attributes,
+    decl_macro
 )]
 
 #[macro_use]

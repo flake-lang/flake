@@ -33,9 +33,14 @@ pub(self) fn display_message(
         msg.white().bold(),
         "-->".blue(),
         _pipeline.file_path,
-        _pipeline
+        match _pipeline
             .current_line
-            .load(std::sync::atomic::Ordering::Relaxed),
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .saturating_sub(1)
+        {
+            0 => 1,
+            n => n,
+        },
         notes.join("\n")
     );
 }

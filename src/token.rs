@@ -37,6 +37,7 @@ pub enum Token {
     Return,
     Cast,
     TypeAlias,
+    Import,
     Mod,
     EOF,
     /// Example: generic.ext-token.sized

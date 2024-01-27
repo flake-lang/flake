@@ -1,18 +1,3 @@
-@transparent
-mod primitive{
-type u8 = __flakec_builtin;
-type u16 = __flakec_builtin;
-type u32 = __flakec_builtin;
-type u64 = __flakec_builtin;
-type f32 = __flakec_builtin;
-type bool = __flakec_builtin;
-type str = __flakec_builtin; 
-type void = __flakec_builtin;
-type never = __flakec_builtin;
-};
+import "compiler-builtins.primitive.*";
 
-
-@feature["flakec-private"]
-mod __private{
-	type __unknown = __flakec_unknown;
-};
+pub type uint = u32;

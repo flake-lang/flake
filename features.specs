@@ -1,3 +1,9 @@
 [
 	("flakec-private".to_owned(), (false, Internal)),
+	("type-system-internals".to_owned(), (false, Internal)),
+	("no-compiler-builtins".to_owned(), (false, Experiment)),
+	("flakec-markers".to_owned(), (false, Internal)),
+	("comptime-evaluation".to_owned(), (false, Experiment)),
+	("generic-unstable".to_owned(), (true, Experiment)), // <--- For Testing??
+	("never-type".to_owned(), (false, Experiment)),
 ]

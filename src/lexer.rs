@@ -1,5 +1,7 @@
 use std::iter::Peekable;
 
+use itertools::{cons_tuples, Itertools};
+
 use crate::token::{self, Token};
 
 #[derive(Debug)]
@@ -55,6 +57,62 @@ pub fn lex_token(token: Token, input: &mut Peekable<impl Iterator<Item = char>>)
     current_token
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ImportPath {
+    file: String,
+    sub_modules: Vec<String>,
+    is_wildcard: bool,
+}
+
+impl ImportPath {
+    pub fn parse(s: String) -> Result<Self, String> {
+        if s.is_empty() {
+            return Err("empty paths in imports aren't allowed.".to_owned());
+        };
+
+        if !s.contains('.') {
+            return Ok(Self::with_file_unchecked(s));
+        };
+
+        let modules = s.split('.').collect::<Vec<_>>();
+
+        if !(modules.len() >= 2) {
+            return Err("path seperator isn't followed by segment.".to_owned());
+        };
+
+        let file = modules[0].to_owned();
+        let mut sub_modules = modules
+            .iter()
+            .skip(1)
+            .map(|s| (*s).to_owned())
+            .collect::<Vec<_>>();
+
+        if sub_modules.len() < 1 {
+            return Err("expected sub module or wildcard.".to_owned());
+        };
+
+        let mut is_wildcard = false;
+        if *sub_modules.last().unwrap() == "*".to_owned() {
+            sub_modules.pop();
+            is_wildcard = true;
+        };
+
+        Ok(Self {
+            file,
+            sub_modules,
+            is_wildcard,
+        })
+    }
+
+    pub fn with_file_unchecked(file: String) -> Self {
+        Self {
+            file,
+            sub_modules: vec![],
+            is_wildcard: false,
+        }
+    }
+}
+
 pub fn try_lex_keyword(s: String) -> Option<Token> {
     match s.as_str() {
         "let" => Some(Token::Let),
@@ -63,6 +121,7 @@ pub fn try_lex_keyword(s: String) -> Option<Token> {
         "mod" => Some(Token::Mod),
         "true" => Some(Token::Boolean(true)),
         "false" => Some(Token::Boolean(false)),
+        "import" => Some(Token::Import),
         "type" => Some(Token::TypeAlias),
         "__flakec_inlined_block" => Some(dbg!(Token::_ViaIdent(
             "internal.keyword.inlined-block".to_owned()
@@ -152,8 +211,17 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::Token> + '
             let chr = peek_or_break!(input);
 
             match chr {
-                ' ' | '\n' | '\t' => {
+                ' ' | '\t' => {
                     input.next();
+                    continue;
+                }
+                '\n' => {
+                    input.next();
+                    crate::pipeline::COMPILER_PIPELINE
+                        .read()
+                        .expect("message pipeline locked")
+                        .current_line
+                        .fetch_add(1, std::sync::atomic::Ordering::Release);
                     continue;
                 }
                 '+' => yield lex_token(Token::Plus, &mut input),

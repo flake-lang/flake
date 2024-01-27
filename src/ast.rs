@@ -2,7 +2,7 @@
 
 use crate::{
     feature::{FeatureGate, FeatureKind},
-    lexer::TokenLexer,
+    lexer::{ImportPath, TokenLexer},
     parser::{self, TokenStream},
     token::Token,
 };
@@ -300,6 +300,28 @@ pub enum Type {
     _Builtin,
 }
 
+pub macro with_feature($ctx:expr, $name:literal, {$($code:tt)*} else {$($else_code:tt)*}) {
+    if $ctx.check_feature_gate($name) {
+        $($code)*
+    }else{
+        $($else_code)*
+    }
+}
+
+macro feature_err($name:literal, $($line:literal),*) {{
+    use $crate::str_or_format;
+    $crate::pipeline_send!(
+        #[Error]
+        ("{:?} is an unstable/internal feature.", $name),
+        (
+            "note: add \"@@feature[{:?}]\" to a module to enable it.",
+            $name
+        ),
+        $($line),*
+    );
+    Default::default()
+}}
+
 pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
     match s.as_str() {
         "u32" => Some(Type::UnsignedInt { bits: 32 }),
@@ -310,8 +332,14 @@ pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
         "void" => Some(Type::Void),
         "f32" => Some(Type::Float { bits: 32 }),
         "never" => Some(Type::Never),
-        "__flakec_unknown" => Some(Type::Unknown),
-        "__flakec_builtin" => Some(Type::_Builtin),
+        "__flakec_unknown" => {
+            with_feature!(ctx, "type-system-internals", {Some(Type::Unknown)} else {feature_err!("type-system-internals", "required to use this item.")})
+        }
+        "__flakec_builtin" => with_feature!(
+                ctx,
+                "type-system-internals",
+                {Some(Type::_Builtin)} else {feature_err!("type-system-internals", "required to use this item.")}
+        ),
         _ => match ctx.try_get_type(s.clone()) {
             Some(ty) => return Some(Type::_Custom(Box::new(ty))),
             None => {
@@ -337,7 +365,12 @@ pub fn split_and_parse_args_1(raw: Vec<Token>) -> Option<Vec<Value>> {
 
     let mut values: Vec<Value> = vec![];
 
-    for token in raw.iter() {
+    let mut input = raw.iter().peekable();
+    for token in input {
+        if token == &Token::Comma {
+            continue;
+        }
+
         match Value::new(token) {
             Some(val) => values.push(val),
             None => error_and_return!(
@@ -418,6 +451,7 @@ pub enum Item {
         tree: Vec<Node>,
         context: Context,
     },
+    Import(ImportPath),
     GlobalVariable {
         name: String,
         ty: Type,
@@ -437,6 +471,7 @@ impl Item {
         let token = input.peek()?;
 
         match token {
+            Token::Import => return parse_import(input, ctx),
             Token::TypeAlias => return parse_type_alias(input, ctx),
             Token::Mod => return parse_mod(input, ctx),
             /* Token::_ViaIdent("internal.keyword.inlined-block") => {
@@ -452,6 +487,27 @@ impl Item {
             }
         }
     }
+}
+
+pub fn parse_import(
+    input: &mut Peekable<impl Iterator<Item = Token>>,
+    ctx: &mut Context,
+) -> Option<Item> {
+    // Syntax: import "compiler-builtins.primitive.*";
+
+    _ = expect_token(input, Token::Import)?;
+
+    let path_str = try_cast!(input.next()?, Token::String, s)?;
+
+    let path = match ImportPath::parse(path_str) {
+        Err(err) => error_and_return!(
+            #[Error]
+            ("{}", err)
+        ),
+        Ok(path) => path,
+    };
+
+    Some(Item::Import(path))
 }
 
 pub fn parse_mod(
@@ -679,7 +735,7 @@ impl Context {
             None => {
                 pipeline_send!(
                     #[Error]
-                    ("The feature {} doesn't exist.", feature)
+                    ("The feature {:?} doesn't exist.", feature)
                 );
                 return false;
             }
@@ -688,7 +744,7 @@ impl Context {
         if feature_gate.1 == FeatureKind::Internal {
             pipeline_send!(
                 #[Warning]
-                ("Use of internal feature {}.", feature),
+                ("Use of internal feature {:?}.", feature),
                 "Using Internal feature is not recommended!"
             );
         }
