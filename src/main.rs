@@ -16,10 +16,14 @@ extern crate macros;
 
 use std::{collections::HashMap, process::exit};
 
+use itertools::Itertools;
 use lexer::create_lexer;
 use parser::TokenStream;
 
-use crate::ast::MarkerImpl;
+use crate::{
+    ast::MarkerImpl,
+    eval::{eval_expr, Context as EvalContext},
+};
 
 extern crate inkwell;
 
@@ -27,6 +31,7 @@ pub mod ast;
 pub mod builtins;
 mod codegen;
 mod compile;
+mod eval;
 mod feature;
 mod lexer;
 mod parser;
@@ -54,7 +59,16 @@ fn main() {
         ),
     };
 
+    let mut eval_context = EvalContext {
+        variables: HashMap::new(),
+    };
+
+    let mut dbg_trokens = create_lexer(code.clone()).collect_vec();
+
+    dbg!(dbg_trokens);
+
     let mut tokens = create_lexer(code);
+
     let mut tokens_peekable = tokens.peekable();
 
     let mut statements = Vec::<ast::Node>::new();
@@ -78,7 +92,8 @@ fn main() {
     */
     pipeline_send!(
         #[Warning]
-        "This is an warning!",
+        "This is an warn--- ^^^^^^^^^^^^^^^^^^^^^^ expected `&mut Peekable<I>`, found `&mut Peekable<&mut I>`
+   |         |ing!",
         "You can write more about it here...",
         "even in multiple lines!"
     );
@@ -100,10 +115,11 @@ fn main() {
             break;
         }
 
-        if let Some(ast_node) = ast::parse_node(&mut tokens_peekable, &mut context) {
+        if let Some(ast_node) = ast::Statement::parse(&mut tokens_peekable, &mut context) {
+            eval::eval_statement(ast_node.clone(), &mut eval_context);
             //   println!("{:#?}", &ast_node);
             //  println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
-            statements.push(ast_node);
+            statements.push(ast::Node::Stmt(ast_node));
         }
     }
 
@@ -135,6 +151,8 @@ fn main() {
         }))
         .unwrap()
     );
+
+    dbg!(eval_context);
 
     std::fs::write("test.fl.json", serilaized);
 

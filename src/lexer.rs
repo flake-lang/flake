@@ -2,7 +2,7 @@ use std::iter::Peekable;
 
 use itertools::{cons_tuples, Itertools};
 
-use crate::token::{self, Token};
+use crate::token::{self, Token as FullToken, TokenKind as Token};
 
 #[derive(Debug)]
 #[repr(u32)]
@@ -203,9 +203,30 @@ pub fn lex_number_literal(
         .map_err(|_| LexError::IntegerParsingFailedi)?)
 }
 
-pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::Token> + 'a {
+struct LexerInput<I: Iterator<Item = char>> {
+    pub inner: I,
+    pub position: usize,
+    pub segment_start: usize,
+}
+
+impl<'a, I: Iterator<Item = char>> Iterator for LexerInput<I> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.position += 1;
+        self.inner.next()
+    }
+}
+
+pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::TokenKind> + 'a {
     std::iter::from_coroutine(move || {
-        let mut input = code.chars().peekable();
+        let mut stream = code.chars().into_iter();
+        let mut input_r = LexerInput {
+            inner: stream,
+            position: 0,
+            segment_start: 0,
+        };
+        let mut input = input_r.peekable();
 
         loop {
             let chr = peek_or_break!(input);

@@ -1,3 +1,2 @@
-import "compiler-builtins.primitive.*";
-
-pub type uint = u32;
+let a = (!true == false);
+let b = a;
