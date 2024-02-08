@@ -118,7 +118,9 @@ pub fn try_lex_keyword(s: String) -> Option<Token> {
         "let" => Some(Token::Let),
         "return" => Some(Token::Return),
         "cast" => Some(Token::Cast),
+        "__flakec_eval" => Some(Token::Comptime),
         "mod" => Some(Token::Mod),
+        "fn" => Some(Token::Function),
         "true" => Some(Token::Boolean(true)),
         "false" => Some(Token::Boolean(false)),
         "import" => Some(Token::Import),
@@ -227,9 +229,30 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::TokenKind>
             segment_start: 0,
         };
         let mut input = input_r.peekable();
+        let mut is_comment = false;
 
         loop {
-            let chr = peek_or_break!(input);
+            let chr = peek_or_break!(input).clone();
+
+            match (is_comment, chr.clone()) {
+                (true, '\n') => {
+                    is_comment = false;
+                    input.next();
+                    continue;
+                }
+                (true, _) => {
+                    input.next();
+                    continue;
+                }
+                _ => {}
+            }
+
+            if chr == '/' {
+                if input.peek() == Some(&'/') {
+                    is_comment = true;
+                    continue;
+                }
+            }
 
             match chr {
                 ' ' | '\t' => {
@@ -260,6 +283,7 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::TokenKind>
                 '<' => yield lex_token(Token::LessThan, &mut input),
                 '@' => yield lex_token(Token::At, &mut input),
                 '[' => yield lex_token(Token::OpeningBracket, &mut input),
+                ':' => yield lex_token(Token::Colon, &mut input),
                 ']' => yield lex_token(Token::ClosingBracket, &mut input),
                 '{' => yield lex_token(Token::LeftBrace, &mut input),
                 '}' => yield lex_token(Token::RightBrace, &mut input),

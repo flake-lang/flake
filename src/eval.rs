@@ -20,6 +20,7 @@ pub fn eval_expr(expr: Expr, ctx: &mut Context) -> Option<Value> {
         Expr::Variable { ty, ident } => return ctx.variables.get(&ident).cloned(),
         Expr::Cast { into, expr } => eval_expr(*expr, ctx),
         Expr::Unary { op, child } => eval_unary(op, eval_expr(*child, ctx)?),
+        Expr::Comptime(exp) => eval_expr(*exp, ctx),
         Expr::Binary { op, rhs, lhs } => {
             exec_operation(op, eval_expr(*rhs, ctx)?, eval_expr(*lhs, ctx)?)
         }

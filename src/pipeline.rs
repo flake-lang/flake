@@ -46,8 +46,10 @@ pub(self) fn display_message(
 }
 
 impl MessagePipeline {
+    #[track_caller]
     pub fn process_message(&self, msg: Message) {
         use colored::Colorize as _;
+        dbg!(core::panic::Location::caller());
         match msg {
             Message::Error { msg, notes } => {
                 display_message(self, "error".red().bold(), msg, notes);

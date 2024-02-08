@@ -14,14 +14,14 @@
 #[macro_use]
 extern crate macros;
 
-use std::{collections::HashMap, process::exit};
+use std::{collections::HashMap, path::PathBuf, process::exit};
 
 use itertools::Itertools;
 use lexer::create_lexer;
 use parser::TokenStream;
 
 use crate::{
-    ast::MarkerImpl,
+    ast::{parse_node, MarkerImpl},
     eval::{eval_expr, Context as EvalContext},
 };
 
@@ -73,53 +73,16 @@ fn main() {
 
     let mut statements = Vec::<ast::Node>::new();
 
-    //  dbg!(ast::Statement::parse(&mut tokens_peekable));
-
-    /*  pipeline::COMPILER_PIPELINE
-    .read()
-    .unwrap()
-    .process_message(pipeline::Message::Error {
-        err: "test".to_owned(),
-        notes: vec!["abc".to_owned(), "123".to_owned()],
-    });*/
-
-    /*  pipeline_send!(
-            #[Error]
-            "This is an error!",
-            "You can write more about it here...",
-            "even in multiple lines!"
-        );
-    */
-    pipeline_send!(
-        #[Warning]
-        "This is an warn--- ^^^^^^^^^^^^^^^^^^^^^^ expected `&mut Peekable<I>`, found `&mut Peekable<&mut I>`
-   |         |ing!",
-        "You can write more about it here...",
-        "even in multiple lines!"
-    );
-
-    pipeline_send!(
-        #[Info]
-        "This is an information!",
-        "You can write more about it here...",
-        "even in multiple lines!"
-    );
-    /*  pipeline_send!(
-        #[_Unimplemented]
-        "unimplemented!!",
-        "... will panic!"
-    ); */
-
     loop {
         if tokens_peekable.peek() == Some(&token::Token::EOF) {
             break;
         }
 
-        if let Some(ast_node) = ast::Statement::parse(&mut tokens_peekable, &mut context) {
-            eval::eval_statement(ast_node.clone(), &mut eval_context);
+        if let Some(ast_node) = dbg!(parse_node(&mut tokens_peekable, &mut context)) {
+            // eval::eval_statement(ast_node.clone(), &mut eval_context);
             //   println!("{:#?}", &ast_node);
             //  println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
-            statements.push(ast::Node::Stmt(ast_node));
+            statements.push(dbg!(ast_node));
         }
     }
 

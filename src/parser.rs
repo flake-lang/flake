@@ -19,6 +19,13 @@ pub trait TokenStream {
 }
 
 impl<I: Iterator<Item = Token>> TokenStream for Peekable<I> {
+ f return match is_pointer {
+        true => Type::Pointee {
+            target_ty: Box::new(ty),
+        },
+        false => ty,
+    }
+    .into();
     fn parse<T: Parse>(&mut self) -> Result<T, String> {
         T::parse(self)
     }
