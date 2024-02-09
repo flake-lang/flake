@@ -1,21 +1,28 @@
 //! Compiling
 
-use core::ascii;
+use core::{ascii, slice::SlicePattern};
 use std::{
+    any::Any,
+    borrow::{Borrow, BorrowMut},
     collections::{btree_map::ValuesMut, HashMap},
-    hash::Hash,
+    hash::{BuildHasher, Hash},
     ops::Deref,
+    sync::atomic::compiler_fence,
 };
 
+use colored::Colorize;
 use inkwell::{
-    basic_block,
-    builder::Builder,
+    basic_block::{self, BasicBlock},
+    builder::{Builder, BuilderError},
     context::Context as LLVMContext,
     module::Module,
-    types::{AnyType, AnyTypeEnum, AsTypeRef, BasicType, BasicTypeEnum, IntType, PointerType},
+    types::{
+        AnyType, AnyTypeEnum, ArrayType, AsTypeRef, BasicMetadataTypeEnum, BasicType,
+        BasicTypeEnum, IntType, PointerType,
+    },
     values::{
-        AnyValue, AnyValueEnum, BasicValue, BasicValueEnum, BasicValueUse, FunctionValue, IntValue,
-        PointerValue,
+        AnyValue, AnyValueEnum, BasicValue, BasicValueEnum, BasicValueUse, FunctionValue,
+        InstructionValue, IntValue, PointerValue,
     },
     AddressSpace,
 };
@@ -23,7 +30,11 @@ use serde::Serialize;
 use serde_json::ser::CharEscape;
 
 use crate::{
-    ast::{Expr, Function, FunctionSignature, Type, Value},
+    ast::{
+        self, infer_expr_type, Block, BuiltinMarkerFunc, Context as ASTContext, Expr, Function,
+        FunctionSignature, Statement, Type, Value,
+    },
+    compile,
     eval::{self, eval_expr},
     token::TokenKind,
 };
@@ -40,7 +51,7 @@ pub struct Compiler<'a, 'ctx> {
     pub context: Context<'ctx>,
     pub builder: &'a Builder<'ctx>,
     pub module: &'a Module<'ctx>,
-    pub function: &'a Function,
+    pub target: Box<dyn Any>,
     pub eval_context: &'a mut crate::eval::Context,
 }
 
@@ -51,48 +62,187 @@ impl<'a> Context<'a> {
     }
 }
 
+#[derive(Debug)]
+pub enum CompilerError<'a> {
+    LLVMBuilder(BuilderError),
+    ComptimeEval(&'a str),
+    VariableNotFound(String),
+    Internal(&'a str),
+    Other(&'a str),
+    OtherString(String),
+}
+
+pub fn discard_value<T>(_: T) {}
+
 impl<'a, 'ctx> Compiler<'a, 'ctx> {
     #[inline]
     pub fn get_function(&self, name: &'_ str) -> Option<FunctionValue<'ctx>> {
         self.module.get_function(name)
     }
 
-    pub fn create_uninitalized_variable(&mut self, ty: Type, name: String) {
+    pub fn create_uninitalized_variable<const REG: bool>(
+        &mut self,
+        ty: Type,
+        name: String,
+    ) -> &mut Self {
         let alloca =
             create_entry_block_alloca(self, name.as_str(), basic_llvm_type(self.llvm_context, ty));
 
-        self.context.variables.insert(name, alloca);
+        if REG {
+            self.context.variables.insert(name, alloca);
+        }
+        self
+    }
+
+    pub fn compile_body(
+        &mut self,
+        func: FunctionValue<'ctx>,
+        block: Block,
+    ) -> Result<(), CompilerError> {
+        let body = self.llvm_context.append_basic_block(func, "body");
+
+        self.builder.build_unconditional_branch(body);
+
+        self.builder.position_at_end(body);
+
+        let statements = block.0;
+
+        for stmt in statements {
+            self.compile_stmt(stmt).unwrap();
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    pub fn build_ret(&mut self, expr: Expr) -> Result<InstructionValue<'ctx>, CompilerError> {
+        let typeof_expr = infer_expr_type(expr.clone());
+
+        if typeof_expr == Type::Void {
+            return self
+                .builder
+                .build_return(None)
+                .map_err(|err| CompilerError::LLVMBuilder(err));
+        } else {
+            let value = self.compile_expr(expr).unwrap();
+            return self
+                .builder
+                .build_return(Some(&value))
+                .map_err(|err| CompilerError::LLVMBuilder(err));
+        }
+    }
+
+    pub fn compile_stmt(
+        &mut self,
+        stmt: Statement,
+    ) -> Result<InstructionValue<'ctx>, CompilerError> {
+        match stmt {
+            Statement::Return { value } => self.build_ret(value),
+            Statement::Let { ty, ident, value } => {
+                self.create_uninitalized_variable::<true>(ty, ident.clone());
+
+                let compiled_value = self.compile_expr(value).unwrap();
+
+                self.store_in_variable(ident, compiled_value)
+            }
+            _ => todo!(),
+        }
+    }
+
+    #[inline]
+    pub fn store_in_variable(
+        &mut self,
+        name: String,
+        value: impl BasicValue<'ctx>,
+    ) -> Result<InstructionValue<'ctx>, CompilerError> {
+        let var_ptr = self
+            .context
+            .variables
+            .get(&name)
+            .ok_or(CompilerError::VariableNotFound(name))?;
+
+        self.builder
+            .build_store(*var_ptr, value)
+            .map_err(|err| CompilerError::LLVMBuilder(err))
+    }
+
+    pub fn compile_func(&mut self) -> Result<FunctionValue<'ctx>, CompilerError> {
+        self.context.variables.clear();
+
+        let func = self
+            .target
+            .downcast_ref::<Function>()
+            .ok_or(CompilerError::Internal("target isn't a function"))?;
+        let sig = func.sig.clone();
+
+        let fn_value = self
+            .compile_sig(func.sig.clone())
+            .map_err(|err| CompilerError::Other("err"))?;
+
+        let fn_prelude = self.llvm_context.append_basic_block(fn_value, "_prelude");
+
+        self.builder.position_at_end(fn_prelude);
+
+        self.context.fn_value_opt = Some(fn_value);
+
+        for (i, arg) in fn_value.get_param_iter().enumerate() {
+            let arg_decl = sig.args[i].clone();
+
+            let alloca = create_entry_block_alloca(
+                self,
+                arg_decl.0.clone().as_str(),
+                basic_llvm_type(self.llvm_context, arg_decl.1),
+            );
+
+            self.builder.build_store(alloca, arg).unwrap();
+
+            self.context.variables.insert(arg_decl.0, alloca);
+        }
+
+        let body = self.compile_body(fn_value, func.body.clone()).unwrap();
+
+        Ok(fn_value)
     }
 
     pub fn compile_sig(&self, sig: FunctionSignature) -> Result<FunctionValue<'ctx>, &'_ str> {
+        let argc = sig.args.len();
+
+        let args = sig
+            .args
+            .iter()
+            .map(|arg| generic_llvm_type_inlined!(self.llvm_context, arg.1.clone()))
+            .collect::<Vec<BasicMetadataTypeEnum>>();
+
         let fn_type = if sig.return_type == Type::Void {
-            self.llvm_context.void_type().fn_type(&[], false)
+            self.llvm_context
+                .void_type()
+                .fn_type(args.as_slice(), false)
         } else {
-            basic_llvm_type(self.llvm_context, sig.return_type).fn_type(&[], false)
+            basic_llvm_type(self.llvm_context, sig.return_type).fn_type(args.as_slice(), false)
         };
 
         let function = self.module.add_function(
             sig.name
-                .unwrap_or(format!("_Unnammed{}", fn_type.as_type_ref() as usize))
+                .unwrap_or(format!("_Un{}", fn_type.as_type_ref() as usize))
                 .as_str(),
             fn_type,
             None,
         );
 
-        let entry = self.llvm_context.append_basic_block(function, "entry");
-
-        self.builder.position_at_end(entry);
+        for (i, arg) in function.get_param_iter().enumerate() {
+            arg.set_name(sig.args[i].0.as_str())
+        }
 
         Ok(function)
     }
 
-    pub fn compile_expr(&mut self, expr: Expr) -> Result<AnyValueEnum<'ctx>, &'_ str> {
+    pub fn compile_expr(&mut self, expr: Expr) -> Result<BasicValueEnum<'ctx>, CompilerError> {
         match expr {
-            Expr::Constant(val) => Ok(llvm_value(self.llvm_context, val).into()),
+            Expr::Constant(val) => Ok(llvm_value(self.llvm_context, val)),
             Expr::Comptime(boxed) => Ok(llvm_value(
                 self.llvm_context,
                 eval_expr(*boxed, self.eval_context)
-                    .ok_or("failed to eval compiletime expression")?,
+                    .ok_or(CompilerError::ComptimeEval("failed to parse expression"))?,
             )
             .into()),
             Expr::Variable { ident: name, .. } => {
@@ -100,12 +250,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     .context
                     .variables
                     .get(&name)
-                    .ok_or("cannot find variable.")?;
+                    .ok_or(CompilerError::VariableNotFound(name.clone()))?;
 
                 return Ok(self
                     .builder
-                    .build_load(*ptr, name.as_str())
-                    .map_err(|ref err| "failed to load value from pointer.")?
+                    .build_load(*ptr, name.clone().as_str())
+                    .map_err(|err| CompilerError::LLVMBuilder(err))?
                     .into());
             }
             _ => todo!(),
@@ -121,7 +271,7 @@ fn create_entry_block_alloca<'a, 'ctx>(
 ) -> PointerValue<'ctx> {
     let builder = compiler.llvm_context.create_builder();
 
-    let entry = compiler.context.fn_value().get_first_basic_block().unwrap();
+    let entry = compiler.context.fn_value().get_last_basic_block().unwrap();
 
     match entry.get_first_instruction() {
         Some(first_instr) => builder.position_before(&first_instr),
@@ -150,15 +300,22 @@ pub fn basic_llvm_type<'ctx>(ctx: &'ctx LLVMContext, ast_type: Type) -> BasicTyp
     }
 }
 
-pub fn llvm_type<'ctx>(ctx: &'ctx LLVMContext, ast_type: Type) -> AnyTypeEnum<'ctx> {
-    match ast_type {
-        Type::Void => ctx.void_type().into(),
-        Type::Function(boxed) => llvm_type(ctx, boxed.return_type)
-            .into_pointer_type()
-            .fn_type(&[], false)
+macro generic_llvm_type_inlined($ctx:expr, $t:expr) {
+    match $t {
+        Type::Boolean => return $ctx.bool_type().into(),
+        Type::UnsignedInt { bits } => $ctx.custom_width_int_type(bits as u32).into(),
+        Type::Int { bits } => $ctx.custom_width_int_type(bits as u32 as u32).into(),
+        Type::Float { bits: 32 } => $ctx.f32_type().into(),
+        Type::String => $ctx.i8_type().ptr_type(AddressSpace::default()).into(),
+        Type::Pointee { target_ty } => basic_llvm_type($ctx, *target_ty)
+            .ptr_type(AddressSpace::default())
             .into(),
-        t => basic_llvm_type(ctx, t).as_any_type_enum(),
+        _ => panic!("The type {:?} is not a valid llvm type!", $t.to_string()),
     }
+}
+
+pub fn llvm_type<'ctx>(ctx: &'ctx LLVMContext, ast_type: Type) -> AnyTypeEnum<'ctx> {
+    generic_llvm_type_inlined!(ctx, ast_type)
 }
 
 pub fn llvm_value<'ctx>(ctx: &'ctx LLVMContext, v: Value) -> BasicValueEnum<'ctx> {
@@ -167,6 +324,18 @@ pub fn llvm_value<'ctx>(ctx: &'ctx LLVMContext, v: Value) -> BasicValueEnum<'ctx
         (TokenKind::Number(n), t) => const_int(ctx, t, *n as u64).into(),
         (TokenKind::String(s), _) => ctx.const_string(s.as_bytes(), false).into(),
         (_, t) => panic!("invalid value type {:?}", t.to_string()),
+    }
+}
+
+#[inline]
+pub fn llvm_value_instance<'ctx, 'a>(
+    ctx: &'ctx LLVMContext,
+    v: Value,
+) -> Option<&'a dyn BasicValue<'ctx>> {
+    match v.get_type() {
+        Type::Void => None,
+        Type::Never => panic!("an instance of the type \"never\" cannot be created"),
+        _ => todo!(),
     }
 }
 

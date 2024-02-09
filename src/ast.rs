@@ -467,6 +467,7 @@ pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
         "u32" => Some(Type::UnsignedInt { bits: 32 }),
         "u16" => Some(Type::UnsignedInt { bits: 16 }),
         "u8" => Some(Type::UnsignedInt { bits: 8 }),
+        "i8" => Some(Type::Int { bits: 8 }),
         "bool" => Some(Type::Boolean),
         "str" => Some(Type::String),
         "void" => Some(Type::Void),
@@ -1078,7 +1079,7 @@ pub fn parse_node(
 ///
 /// # Parsing
 /// See [parse_block] function.
-type Block = (Vec<Statement>, Context);
+pub type Block = (Vec<Statement>, Context);
 
 pub fn parse_block(
     input: &mut Peekable<impl Iterator<Item = Token>>,

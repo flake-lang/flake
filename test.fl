@@ -1,4 +1,11 @@
-version
+
+fn main[]: *i8{
+	return "hello world!";
+};
+
+fn test[a: u32]: u32 {
+	return a;
+};
 
 // type MainFunc = *fn[u32, *str]: u32;
 

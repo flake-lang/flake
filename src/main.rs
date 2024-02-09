@@ -18,8 +18,10 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     process::exit,
+    sync::atomic::compiler_fence,
 };
 
+use colored::Colorize;
 use inkwell::{passes::PassManagerSubType, values::FunctionValue};
 use itertools::Itertools;
 use lexer::create_lexer;
@@ -27,6 +29,7 @@ use parser::TokenStream;
 
 use crate::{
     ast::{parse_node, FnSig, Function, MarkerImpl, Type},
+    codegen::Compiler,
     eval::{eval_expr, Context as EvalContext},
 };
 
@@ -78,14 +81,14 @@ fn main() {
 
     let mut tokens_peekable = tokens.peekable();
 
-    let mut statements = Vec::<ast::Expr>::new();
+    let mut statements = Vec::<ast::Node>::new();
 
     loop {
         if tokens_peekable.peek() == Some(&token::Token::EOF) {
             break;
         }
 
-        if let Some(ast_node) = ast::Expr::parse(&mut tokens_peekable, &mut context) {
+        if let Some(ast_node) = ast::parse_node(&mut tokens_peekable, &mut context) {
             // eval::eval_statement(ast_node.clone(), &mut eval_context);
             //   println!("{:#?}", &ast_node);
             //  println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
@@ -142,32 +145,29 @@ fn main() {
         },
         builder: &builder,
         module: &module,
-        function: &Function {
-            name: "main".to_owned(),
-            sig: ast::FnSig {
-                args: vec![],
-                return_type: Type::Boolean,
-                name: Some("main".to_owned()),
-            },
-            body: (vec![], context.clone()),
-        },
+        target: Box::new(()),
         eval_context: &mut eval_context,
     };
 
-    compiler.context.fn_value_opt = Some(
-        compiler
-            .compile_sig(FnSig {
-                args: vec![],
-                name: Some("main".to_owned()),
-                return_type: Type::Void,
-            })
-            .unwrap(),
-    );
+    //  compiler.compile_func();
 
-    compiler.create_uninitalized_variable(Type::String, "version".to_owned());
+    //   compiler.create_uninitalized_variable(Type::String, "version".to_owned());
 
     for expr in statements {
-        dbg!(compiler.compile_expr(expr));
+        match expr {
+            ast::Node::Item(ast::Item::Function(f)) => {
+                compiler.target = Box::new(f);
+                compiler.compile_func();
+            }
+            _ => todo!(),
+        }
+    }
+
+    if let Err(llvm_str) = compiler.module.verify() {
+        eprintln!(
+            "=== LLVM ERROR ===\n{}\n=== END ===",
+            llvm_str.to_string().replace("\n", "\n ==>").red().bold()
+        );
     }
 
     compiler.module.print_to_stderr();
