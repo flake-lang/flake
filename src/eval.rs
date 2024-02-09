@@ -62,7 +62,8 @@ pub fn exec_operation(op: Operator, rhs: Value, lhs: Value) -> Option<Value> {
             }
             (Operator::Minus, TokenKind::Number(n1), TokenKind::Number(n2)) => {
                 Token::Number(n1 - n2)
-            }
+            },
+            (Operator::Plus, Token::String(s1), Token::String(s2)) => Token::String(format!("{}{}", s1, s2)),
             (Operator::Eq, ..) => TokenKind::Boolean(cmp_values(rhs, lhs)),
             _ => todo!(),
         }

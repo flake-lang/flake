@@ -1,8 +1,8 @@
+version
 
-type MainFunc = *fn[u32, *str]: u32;
+// type MainFunc = *fn[u32, *str]: u32;
 
-fn call_main[main: MainFunc]: u32 {
+// fn call_main[main: MainFunc]: u32 {
 	// You can't call function/function pointer yet... 
-	return 0;
-};
-
+//	return 0;
+//};

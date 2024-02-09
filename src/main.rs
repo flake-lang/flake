@@ -14,14 +14,19 @@
 #[macro_use]
 extern crate macros;
 
-use std::{collections::HashMap, path::PathBuf, process::exit};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::exit,
+};
 
+use inkwell::{passes::PassManagerSubType, values::FunctionValue};
 use itertools::Itertools;
 use lexer::create_lexer;
 use parser::TokenStream;
 
 use crate::{
-    ast::{parse_node, MarkerImpl},
+    ast::{parse_node, FnSig, Function, MarkerImpl, Type},
     eval::{eval_expr, Context as EvalContext},
 };
 
@@ -59,6 +64,8 @@ fn main() {
         ),
     };
 
+    context.register_local_variable("version".to_owned(), Type::String);
+
     let mut eval_context = EvalContext {
         variables: HashMap::new(),
     };
@@ -71,14 +78,14 @@ fn main() {
 
     let mut tokens_peekable = tokens.peekable();
 
-    let mut statements = Vec::<ast::Node>::new();
+    let mut statements = Vec::<ast::Expr>::new();
 
     loop {
         if tokens_peekable.peek() == Some(&token::Token::EOF) {
             break;
         }
 
-        if let Some(ast_node) = dbg!(parse_node(&mut tokens_peekable, &mut context)) {
+        if let Some(ast_node) = ast::Expr::parse(&mut tokens_peekable, &mut context) {
             // eval::eval_statement(ast_node.clone(), &mut eval_context);
             //   println!("{:#?}", &ast_node);
             //  println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
@@ -115,8 +122,6 @@ fn main() {
         .unwrap()
     );
 
-    dbg!(eval_context);
-
     std::fs::write("test.fl.json", serilaized);
 
     // let ast = dbg!(parser::parse_node(&mut tokens_peekable)).expect("Failed to parse syntax tree");
@@ -124,4 +129,51 @@ fn main() {
     // let mut compiler = compile::Compiler::new();
 
     // compiler.compile_with_prelude_main(vec![ast]);
+
+    let llvm_context = inkwell::context::Context::create();
+    let module = llvm_context.create_module("test");
+    let builder = llvm_context.create_builder();
+
+    let mut compiler = codegen::Compiler {
+        llvm_context: &llvm_context,
+        context: codegen::Context {
+            variables: HashMap::new(),
+            fn_value_opt: None,
+        },
+        builder: &builder,
+        module: &module,
+        function: &Function {
+            name: "main".to_owned(),
+            sig: ast::FnSig {
+                args: vec![],
+                return_type: Type::Boolean,
+                name: Some("main".to_owned()),
+            },
+            body: (vec![], context.clone()),
+        },
+        eval_context: &mut eval_context,
+    };
+
+    compiler.context.fn_value_opt = Some(
+        compiler
+            .compile_sig(FnSig {
+                args: vec![],
+                name: Some("main".to_owned()),
+                return_type: Type::Void,
+            })
+            .unwrap(),
+    );
+
+    compiler.create_uninitalized_variable(Type::String, "version".to_owned());
+
+    for expr in statements {
+        dbg!(compiler.compile_expr(expr));
+    }
+
+    compiler.module.print_to_stderr();
+    compiler
+        .module
+        .write_bitcode_to_path(Path::new("../test.fl.bc"));
+
+    dbg!(eval_context);
 }

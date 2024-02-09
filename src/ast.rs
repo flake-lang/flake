@@ -10,7 +10,7 @@ use crate::{
     token::{Token, TokenKind},
 };
 use std::{
-    any::TypeId, collections::HashMap, fmt::Write, iter::Peekable, ops::Deref, str::Matches,
+    any::TypeId, collections::HashMap, fmt::Write, iter::Peekable, ops::Deref,
     sync::mpsc::RecvTimeoutError,
 };
 
@@ -270,13 +270,14 @@ pub struct Function {
 }
 
 #[derive(Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-struct FnSig<ARGS> {
-    args: ARGS,
-    return_type: Type,
+pub struct FnSig<ARGS> {
+    pub args: ARGS,
+    pub name: Option<String>,
+    pub return_type: Type,
 }
 
-type FunctionSignature = FnSig<FunctionArgs>;
-type UnnammedFunctionSignature = FnSig<Vec<Type>>;
+pub type FunctionSignature = FnSig<FunctionArgs>;
+pub type UnnammedFunctionSignature = FnSig<Vec<Type>>;
 
 impl core::fmt::Debug for FunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -334,7 +335,7 @@ pub fn parse_function(
 
     _ = expect_token(input, Token::Function)?;
 
-    let name = try_cast!(input.next()?, Token::Identifier, ident)?;
+    let name = try_cast!(input.next()?, Token::Identifier, ident)?.clone();
     let args_raw = parse_raw_params(input)?;
     let args = parse_function_args(&mut args_raw.iter().cloned().peekable(), ctx)?;
 
@@ -360,10 +361,11 @@ pub fn parse_function(
     input.next();
 
     Some(Function {
-        name,
+        name: name.clone(),
         sig: FunctionSignature {
             args,
             return_type: return_ty,
+            name: Some(name),
         },
         body,
     })
@@ -805,7 +807,11 @@ pub fn parse_fn_type(
 
     dbg!(&return_type);
 
-    Some(UnnammedFunctionSignature { args, return_type })
+    Some(UnnammedFunctionSignature {
+        args,
+        name: None,
+        return_type,
+    })
 }
 
 pub fn parse_let(
