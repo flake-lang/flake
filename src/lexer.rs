@@ -13,6 +13,7 @@ pub enum LexError {
     IntegerParsingFailedi,
 }
 
+#[macro_export]
 macro_rules! peek_or_break {
     ($peekable:ident) => {
         if let Some(value) = $peekable.peek() {
@@ -34,14 +35,23 @@ impl TokenLexer for Token {
             (Token::String(_), _) | (Token::Number(_), _) => unimplemented!(),
             (Token::Equals, '=') => Some(Token::DoubleEquals),
             (Token::At, '@') => Some(Token::DoubleAt),
+            (Token::Identifier(ident), '!') => Some(Token::Call(ident.clone())),
             _ => None,
         }
     }
 }
 
 pub fn lex_token(token: Token, input: &mut Peekable<impl Iterator<Item = char>>) -> Token {
-    let mut current_token = token;
-    input.next();
+    let mut current_token = token.clone();
+
+    let mut is_start = true;
+
+    match token {
+        Token::Identifier(_) => {}
+        _ => {
+            input.next();
+        }
+    };
 
     loop {
         let chr = peek_or_break!(input);
@@ -49,6 +59,7 @@ pub fn lex_token(token: Token, input: &mut Peekable<impl Iterator<Item = char>>)
         if let Some(combined_token) = current_token.try_combine_with(*chr) {
             input.next();
             current_token = combined_token;
+            is_start = false;
         } else {
             break;
         }
@@ -176,29 +187,23 @@ pub fn lex_string_literal(
 
 pub fn lex_number_literal(
     input: &mut Peekable<impl Iterator<Item = char>>,
-) -> Result<i64, LexError> {
+) -> Result<u64, LexError> {
     let mut buffer = String::new();
     let mut maybe_sign_possible = true;
 
+    dbg!("numeric!!");
+
     loop {
-        let chr = peek_or_break!(input);
-        match chr {
-            '0'..'9' => {
-                let c = chr.clone();
-                input.next();
-                buffer.push(c);
-                maybe_sign_possible = false;
-            }
-            '-' => {
-                if maybe_sign_possible {
-                    input.next();
-                    buffer.push('-');
-                    maybe_sign_possible = false;
-                }
-            }
-            _ => break,
-        };
+        let chr = peek_or_break!(input).clone();
+        if dbg!(chr).is_ascii_digit() {
+            input.next();
+            buffer.push(chr);
+        } else {
+            break;
+        }
     }
+
+    dbg!(&buffer);
 
     Ok(buffer
         .parse()
@@ -220,15 +225,22 @@ impl<'a, I: Iterator<Item = char>> Iterator for LexerInput<I> {
     }
 }
 
+pub fn lex_char_literal(
+    input: &mut Peekable<impl Iterator<Item = char>>,
+) -> Result<char, LexError> {
+    let lit = input.take(3);
+
+    match lit.collect::<Vec<char>>().as_slice() {
+        ['\'', c, '\''] => Ok(*c),
+        _ => Err(LexError::InvalidCharacter),
+    }
+}
+
 pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::TokenKind> + 'a {
     std::iter::from_coroutine(move || {
         let mut stream = code.chars().into_iter();
-        let mut input_r = LexerInput {
-            inner: stream,
-            position: 0,
-            segment_start: 0,
-        };
-        let mut input = input_r.peekable();
+        let mut input = stream.peekable();
+
         let mut is_comment = false;
 
         loop {
@@ -281,6 +293,7 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::TokenKind>
                 ')' => yield lex_token(Token::RightParenthesis, &mut input),
                 '>' => yield lex_token(Token::GreaterThan, &mut input),
                 '<' => yield lex_token(Token::LessThan, &mut input),
+                '$' => yield lex_token(Token::Dollar, &mut input),
                 '@' => yield lex_token(Token::At, &mut input),
                 '[' => yield lex_token(Token::OpeningBracket, &mut input),
                 ':' => yield lex_token(Token::Colon, &mut input),
@@ -292,22 +305,31 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::TokenKind>
                         lex_string_literal(&mut input).expect("Failed to lex string literal"),
                     )
                 }
+                '\'' => {
+                    yield Token::Char(
+                        lex_char_literal(&mut input).expect("Failed to lex char literal"),
+                    )
+                }
                 '0'..'9' => {
+                    dbg!(234);
                     yield Token::Number(
                         lex_number_literal(&mut input).expect("Failed to lex number literal"),
                     )
                 }
                 _ => {
-                    yield match lex_unhandled(&mut input) {
-                        Token::Identifier(ident) => {
-                            if ident.is_empty() {
-                                break;
-                            } else {
-                                Token::Identifier(ident)
+                    yield lex_token(
+                        match lex_unhandled(&mut input) {
+                            Token::Identifier(ident) => {
+                                if ident.is_empty() {
+                                    break;
+                                } else {
+                                    Token::Identifier(ident)
+                                }
                             }
-                        }
-                        t => t,
-                    }
+                            t => t,
+                        },
+                        &mut input,
+                    )
                 }
             }
         }

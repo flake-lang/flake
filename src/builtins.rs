@@ -3,6 +3,7 @@
 pub static MARKERS: &[(&'static str, crate::ast::BuiltinMarkerFunc)] = &[
     ("transparent", _marker_transparent),
     ("feature", _marker_feature),
+    ("compiler_intrinsic", _marker_compiler_intrinsic),
     ("__global_feature", _global_marker_feature),
     ("__global_no_compiler_builtins", |_, _, _| {}),
 ];
@@ -10,11 +11,23 @@ pub static MARKERS: &[(&'static str, crate::ast::BuiltinMarkerFunc)] = &[
 use std::ops::DerefMut;
 
 use crate::{
-    ast::{Context, Item, Value},
+    ast::{self, Context, Function, Item, Value},
     error_and_return, pipeline_send, str_or_format,
 };
 
+use inkwell::execution_engine::FunctionLookupError;
 use macros::flakc_builtin;
+
+fn _marker_compiler_intrinsic(mut item: &mut Item, ctx: &mut Context, args: Vec<Value>) {
+    dbg!(&item);
+
+    if let Item::Function(Function { ref mut name, .. }) = item {
+        ctx.functions
+            .get_mut(name)
+            .expect("function doesn't exits")
+            .is_intrinsic = true;
+    }
+}
 
 fn _marker_transparent(mut item: &mut Item, ctx: &mut Context, args: Vec<Value>) {
     if let Item::Module {

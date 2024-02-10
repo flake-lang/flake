@@ -1,15 +1,6 @@
+fn putchar[c: char];
 
-fn main[]: *i8{
-	return "hello world!";
-};
-
-fn test[a: u32]: u32 {
-	return a;
-};
-
-// type MainFunc = *fn[u32, *str]: u32;
-
-// fn call_main[main: MainFunc]: u32 {
-	// You can't call function/function pointer yet... 
-//	return 0;
-//};
+fn main[]: u32{
+    putchar!['A']
+    return 123;
+}

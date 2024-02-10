@@ -5,13 +5,15 @@ use std::{
     any::Any,
     borrow::{Borrow, BorrowMut},
     collections::{btree_map::ValuesMut, HashMap},
+    fmt::Debug,
     hash::{BuildHasher, Hash},
     ops::Deref,
-    sync::atomic::compiler_fence,
+    sync::{atomic::compiler_fence, Arc},
 };
 
 use colored::Colorize;
 use inkwell::{
+    attributes::Attribute,
     basic_block::{self, BasicBlock},
     builder::{Builder, BuilderError},
     context::Context as LLVMContext,
@@ -21,11 +23,12 @@ use inkwell::{
         BasicTypeEnum, IntType, PointerType,
     },
     values::{
-        AnyValue, AnyValueEnum, BasicValue, BasicValueEnum, BasicValueUse, FunctionValue,
-        InstructionValue, IntValue, PointerValue,
+        AnyValue, AnyValueEnum, BasicMetadataValueEnum, BasicValue, BasicValueEnum, BasicValueUse,
+        FunctionValue, InstructionValue, IntValue, PointerValue,
     },
     AddressSpace,
 };
+use itertools::Either;
 use serde::Serialize;
 use serde_json::ser::CharEscape;
 
@@ -34,7 +37,7 @@ use crate::{
         self, infer_expr_type, Block, BuiltinMarkerFunc, Context as ASTContext, Expr, Function,
         FunctionSignature, Statement, Type, Value,
     },
-    compile,
+    cast, compile,
     eval::{self, eval_expr},
     token::TokenKind,
 };
@@ -145,6 +148,17 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 self.store_in_variable(ident, compiled_value)
             }
+            Statement::FunctionCall {
+                func,
+                args,
+                intrinsic,
+            } => self.compile_function_call(func, args, intrinsic)?.either(
+                |v| {
+                    v.as_instruction_value()
+                        .ok_or(CompilerError::Other("invalid instruction value"))
+                },
+                |i| Ok(i),
+            ),
             _ => todo!(),
         }
     }
@@ -179,6 +193,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             .compile_sig(func.sig.clone())
             .map_err(|err| CompilerError::Other("err"))?;
 
+        if func.body.is_none() {
+            return Ok(fn_value);
+        }
+
         let fn_prelude = self.llvm_context.append_basic_block(fn_value, "_prelude");
 
         self.builder.position_at_end(fn_prelude);
@@ -199,7 +217,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             self.context.variables.insert(arg_decl.0, alloca);
         }
 
-        let body = self.compile_body(fn_value, func.body.clone()).unwrap();
+        let body = self
+            .compile_body(fn_value, func.body.clone().unwrap())
+            .unwrap();
 
         Ok(fn_value)
     }
@@ -257,9 +277,91 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     .build_load(*ptr, name.clone().as_str())
                     .map_err(|err| CompilerError::LLVMBuilder(err))?
                     .into());
-            }
+            },
+            Expr::Cast { into, expr } => self.compile_expr(*expr),
+            Expr::FunctionCall {
+                func,
+                args,
+                intrinsic,
+                ..
+            } => self
+                .compile_function_call(func, args, intrinsic)
+                .map(|either| {
+                    either.left().ok_or(CompilerError::Other(
+                        "cannot call void function is expression",
+                    ))
+                })?,
             _ => todo!(),
         }
+    }
+
+    pub fn invoke_intrinsic(
+        &mut self,
+        name: String,
+        args: Vec<Expr>,
+    ) -> Result<Either<BasicValueEnum<'ctx>, InstructionValue<'ctx>>, CompilerError> {
+        Ok(match name.as_str() {
+            "unreachable" => Either::Right(
+                self.builder
+                    .build_unreachable()
+                    .map_err(|err| CompilerError::LLVMBuilder(err))?,
+            ),
+            "__goto_label" => {
+                let fn_value = self.context.fn_value();
+                let arg0 = eval_expr(args.get(0).unwrap().clone(), self.eval_context).unwrap();
+                let name = cast!(arg0.deref(), TokenKind::String, str);
+
+                let block = fn_value
+                    .get_basic_block_iter()
+                    .find(|b| b.get_name().to_str() == Ok(name.as_str()))
+                    .expect("invalid block jump");
+
+                Either::Right(
+                    self.builder
+                        .build_unconditional_branch(block)
+                        .map_err(|err| CompilerError::LLVMBuilder(err))?,
+                )
+            }
+            _ => panic!("invalid intrinsic {:?}!", name),
+        })
+    }
+
+    pub fn compile_function_call(
+        &mut self,
+        name: String,
+        args: Vec<Expr>,
+        intrinsic: bool,
+    ) -> Result<Either<BasicValueEnum<'ctx>, InstructionValue<'ctx>>, CompilerError> {
+        if intrinsic {
+            return Ok(self.invoke_intrinsic(name.clone(), args.clone())?);
+        }
+
+        let func_value = self
+            .module
+            .get_function(name.as_str())
+            .ok_or(CompilerError::Other("function not found"))?;
+
+        let llvm_args = args
+            .iter()
+            .map(|v| llvm_value_to_metavalue(self.compile_expr(v.clone()).unwrap()))
+            .collect::<Vec<BasicMetadataValueEnum<'ctx>>>();
+
+        self.builder
+            .build_call(func_value, llvm_args.as_slice(), "")
+            .map_err(|err| CompilerError::LLVMBuilder(err))
+            .map(|site| site.try_as_basic_value())
+    }
+}
+
+#[inline(always)]
+pub fn llvm_value_to_metavalue<'ctx>(v: BasicValueEnum<'ctx>) -> BasicMetadataValueEnum<'ctx> {
+    match v {
+        BasicValueEnum::ArrayValue(a) => BasicMetadataValueEnum::ArrayValue(a),
+        BasicValueEnum::IntValue(x) => BasicMetadataValueEnum::IntValue(x),
+        BasicValueEnum::FloatValue(f) => BasicMetadataValueEnum::FloatValue(f),
+        BasicValueEnum::PointerValue(p) => BasicMetadataValueEnum::PointerValue(p),
+        BasicValueEnum::StructValue(s) => BasicMetadataValueEnum::StructValue(s),
+        _ => unimplemented!(),
     }
 }
 
@@ -289,7 +391,9 @@ pub fn basic_llvm_type<'ctx>(ctx: &'ctx LLVMContext, ast_type: Type) -> BasicTyp
             .custom_width_int_type(bits as u32 as u32)
             .as_basic_type_enum(),
         Type::Float { bits: 32 } => ctx.f32_type().as_basic_type_enum(),
+        Type::Char => ctx.i8_type().as_basic_type_enum(),
         Type::String => ctx.i8_type().ptr_type(AddressSpace::default()).into(),
+        Type::Void => ctx.const_struct(&[], false).get_type().as_basic_type_enum(),
         Type::Pointee { target_ty } => basic_llvm_type(ctx, *target_ty)
             .ptr_type(AddressSpace::default())
             .as_basic_type_enum(),
@@ -306,6 +410,7 @@ macro generic_llvm_type_inlined($ctx:expr, $t:expr) {
         Type::UnsignedInt { bits } => $ctx.custom_width_int_type(bits as u32).into(),
         Type::Int { bits } => $ctx.custom_width_int_type(bits as u32 as u32).into(),
         Type::Float { bits: 32 } => $ctx.f32_type().into(),
+        Type::Char => $ctx.i8_type().into(),
         Type::String => $ctx.i8_type().ptr_type(AddressSpace::default()).into(),
         Type::Pointee { target_ty } => basic_llvm_type($ctx, *target_ty)
             .ptr_type(AddressSpace::default())
@@ -318,13 +423,22 @@ pub fn llvm_type<'ctx>(ctx: &'ctx LLVMContext, ast_type: Type) -> AnyTypeEnum<'c
     generic_llvm_type_inlined!(ctx, ast_type)
 }
 
-pub fn llvm_value<'ctx>(ctx: &'ctx LLVMContext, v: Value) -> BasicValueEnum<'ctx> {
-    match (v.deref(), v.get_type()) {
-        (TokenKind::Boolean(b), _) => ctx.bool_type().const_int(boolean_to_uint(*b), false).into(),
-        (TokenKind::Number(n), t) => const_int(ctx, t, *n as u64).into(),
-        (TokenKind::String(s), _) => ctx.const_string(s.as_bytes(), false).into(),
+macro generic_llvm_value_inlined($ctx:expr, $v:expr) {
+    match ($v.deref(), $v.get_type()) {
+        (TokenKind::Boolean(b), _) => $ctx
+            .bool_type()
+            .const_int(boolean_to_uint(*b), false)
+            .into(),
+        (TokenKind::Number(n), t) => const_int($ctx, t, *n as u64).into(),
+        (TokenKind::String(s), _) => $ctx.const_string(s.as_bytes(), false).into(),
+        (TokenKind::Char(c), t) => $ctx.i8_type().const_int(*c as u64, false).into(),
         (_, t) => panic!("invalid value type {:?}", t.to_string()),
     }
+}
+
+#[inline]
+pub fn llvm_value<'ctx>(ctx: &'ctx LLVMContext, v: Value) -> BasicValueEnum<'ctx> {
+    generic_llvm_value_inlined!(ctx, v)
 }
 
 #[inline]

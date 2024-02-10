@@ -1,4 +1,3 @@
-#![allow(warnings)]
 #![feature(
     coroutines,
     iter_from_coroutine,
@@ -7,6 +6,7 @@
     exclusive_range_pattern,
     slice_pattern,
     proc_macro_hygiene,
+    extend_one,
     stmt_expr_attributes,
     decl_macro
 )]
@@ -28,9 +28,7 @@ use lexer::create_lexer;
 use parser::TokenStream;
 
 use crate::{
-    ast::{parse_node, FnSig, Function, MarkerImpl, Type},
-    codegen::Compiler,
-    eval::{eval_expr, Context as EvalContext},
+    ast::{parse_node, FnSig, Function, MarkerImpl, Type}, codegen::Compiler, eval::{eval_expr, Context as EvalContext}, token::TokenKind
 };
 
 extern crate inkwell;
@@ -41,6 +39,7 @@ mod codegen;
 mod compile;
 mod eval;
 mod feature;
+mod intrinsics;
 mod lexer;
 mod parser;
 mod pipeline;
@@ -54,6 +53,7 @@ fn main() {
     let mut context = ast::Context {
         locals: HashMap::new(),
         can_return: true,
+        functions: HashMap::new(),
         types: [].into(),
         feature_gates: {
             use feature::FeatureKind::*;
@@ -84,16 +84,17 @@ fn main() {
     let mut statements = Vec::<ast::Node>::new();
 
     loop {
-        if tokens_peekable.peek() == Some(&token::Token::EOF) {
-            break;
-        }
 
-        if let Some(ast_node) = ast::parse_node(&mut tokens_peekable, &mut context) {
+        if tokens_peekable.peek() == None{
+            break;
+        } 
+
+        if let Some(ast_node) = dbg!(ast::parse_node(&mut tokens_peekable, &mut context)) {
             // eval::eval_statement(ast_node.clone(), &mut eval_context);
             //   println!("{:#?}", &ast_node);
             //  println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
             statements.push(dbg!(ast_node));
-        }
+        }else { break; }
     }
 
     if pipeline::COMPILER_PIPELINE
@@ -165,15 +166,18 @@ fn main() {
 
     if let Err(llvm_str) = compiler.module.verify() {
         eprintln!(
-            "=== LLVM ERROR ===\n{}\n=== END ===",
-            llvm_str.to_string().replace("\n", "\n ==>").red().bold()
+            "=== LLVM ERROR ===\n{}{}\n",
+            llvm_str.to_string().replace("\n", "\n ==> ").red().bold(),
+            "[Generated IR may be invalid!]".red().bold()
         );
     }
 
+    eprintln!("=== LLVM IR (-Dllvm-ir) ===");
     compiler.module.print_to_stderr();
     compiler
         .module
         .write_bitcode_to_path(Path::new("../test.fl.bc"));
 
+    eprintln!("=== END ===");
     dbg!(eval_context);
 }

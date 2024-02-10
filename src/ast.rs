@@ -10,7 +10,11 @@ use crate::{
     token::{Token, TokenKind},
 };
 use std::{
-    any::TypeId, collections::HashMap, fmt::Write, iter::Peekable, ops::Deref,
+    any::TypeId,
+    collections::HashMap,
+    fmt::Write,
+    iter::Peekable,
+    ops::{Deref, DerefMut},
     sync::mpsc::RecvTimeoutError,
 };
 
@@ -66,6 +70,12 @@ pub enum Expr {
         ty: Type,
         ident: String,
     },
+    FunctionCall {
+        func: String,
+        args: Vec<Expr>,
+        _infer_helper: Type,
+        intrinsic: bool,
+    },
     Cast {
         into: Type,
         expr: Box<Expr>,
@@ -77,18 +87,20 @@ macro_rules! match_exprs {
     {$($exp:expr => $n:pat => $on:expr),*} => {
         $(
         match $exp{
-            $n => $on,
+
+                  $n => $on,
             _ => {}
             }
     );*
     };
 }
 
+#[macro_export]
 macro_rules! cast {
     ($target:expr, $pat:path, $($value:ident),*) => {{
         match $target{
             $pat($($value),*) => ($($value),*), // #1
-            _ => panic!("mismatch variant {} when cast to {}", ($target), stringify!($pat)), // #2
+            _ => panic!("mismatch variant when cast to {}", stringify!($pat)), // #2
     }}};
 
  ($target:expr, $pat:path) => {{
@@ -171,6 +183,7 @@ macro_rules! try_cast {
     }}};
 }
 
+/// Parse a cast expression.
 pub fn parse_cast(
     input: &mut Peekable<impl Iterator<Item = Token>>,
     ctx: &mut Context,
@@ -190,7 +203,7 @@ pub fn parse_cast(
         }
     };
 
-    let target_ty = type_from_str(try_cast!(input.next()?, Token::Identifier, ty)?, ctx)?;
+    let target_ty = parse_type(input, ctx)?;
 
     match input.next()? {
         Token::ClosingBracket => {}
@@ -219,6 +232,8 @@ impl Expr {
     ) -> Option<Self> {
         let token = input.peek()?.clone();
 
+        dbg!(("expr!!", &token));
+
         if token == Token::LeftParenthesis {
             input.next();
             let res = Self::parse(input, ctx)?;
@@ -227,13 +242,16 @@ impl Expr {
         }
 
         match_exprs! {
-             Value::new(&token) => Some(value) => {
-                     input.next()?;
-                     return Some(if let Some(op) = Operator::from_token(input.peek().map(|v|v.clone())?){
+             dbg!(Value::new(&token)) => Some(value) => {
+                     if input.next().is_none(){
+                    dbg!("c2");
+                    return Some(Self::Constant(value));
+                };
+                     return Some(if let Some(op) = Operator::from_token(input.peek().map(|v|v.clone()).unwrap_or(TokenKind::_ViaIdent("_invalid".to_owned()))){
                          input.next()?;
                          Self::Binary { op, rhs: Box::new(Self::Constant(value)), lhs: Box::new(Self::parse(input, ctx)?)}
                      }else {
-
+                        dbg!("c3");
                          Self::Constant(value)
                      });
              },
@@ -247,10 +265,19 @@ impl Expr {
                     return Some(Self::Comptime(Box::new(expr)));
              },
              token => Token::Cast => return parse_cast(input, ctx),
+             token => Token::Call(func) => {
+                input.next();
+                let func_ins = ctx.get_function(func.clone());
+                return Some(Self::FunctionCall{
+                func: func.clone(),
+                _infer_helper: func_ins.0,
+                args: dbg!(split_and_parse_args_2(dbg!(parse_raw_params(input))?, ctx))?,
+                intrinsic: func_ins.1,
+            })},
              token => Token::Identifier(ident) => {
                     let ident_cloned = ident.clone();
                     let ty = ctx.typeof_variable(ident_cloned.clone())?;
-                    input.next()?;
+                    input.next();
                     return Some(Self::Variable { ty, ident: ident_cloned });
              }
 
@@ -266,7 +293,7 @@ impl Expr {
 pub struct Function {
     pub name: String,
     pub sig: FunctionSignature,
-    pub body: Block,
+    pub body: Option<Block>,
 }
 
 #[derive(Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -274,6 +301,7 @@ pub struct FnSig<ARGS> {
     pub args: ARGS,
     pub name: Option<String>,
     pub return_type: Type,
+    pub is_intrinsic: bool,
 }
 
 pub type FunctionSignature = FnSig<FunctionArgs>;
@@ -310,15 +338,13 @@ pub fn parse_function_args(
     let mut args = FunctionArgs::new();
 
     loop {
-        let name = try_cast!(
+        let name = 
             match raw.next() {
                 Some(Token::Comma) => continue,
-                Some(t) => t,
+                Some(Token::Identifier(ident)) => ident,
+                Some(_) => unimplemented!(),
                 None => break,
-            },
-            Token::Identifier,
-            ident
-        )?;
+            };
         _ = expect_token(raw, Token::Colon);
         let ty = parse_type(raw, ctx)?;
         args.push((name, ty));
@@ -336,7 +362,7 @@ pub fn parse_function(
     _ = expect_token(input, Token::Function)?;
 
     let name = try_cast!(input.next()?, Token::Identifier, ident)?.clone();
-    let args_raw = parse_raw_params(input)?;
+    let args_raw = parse_raw_params(input).unwrap_or(vec![]);
     let args = parse_function_args(&mut args_raw.iter().cloned().peekable(), ctx)?;
 
     dbg!((&name, &args_raw));
@@ -347,26 +373,48 @@ pub fn parse_function(
         return_ty = parse_type(input, ctx)?;
     }
 
-    dbg!(2);
+    let sig = FunctionSignature {
+        args: args.clone(),
+        return_type: return_ty,
+        name: Some(name.clone()),
+        is_intrinsic: false,
+    };
+
+    if ctx.functions.insert(name.clone(), sig.clone()).is_some() {
+        pipeline_send!(
+            #[Warning]
+            (
+                "The function {} already exits in the AST's context... overriding...!",
+                name.clone()
+            )
+        );
+    };
+
+    if input.peek() == Some(&Token::Semicolon) || input.peek() == None {
+        return Some(Function {
+            name: name.clone(),
+            sig,
+            body: None,
+        });
+    }
 
     let mut new_context = Context {
         locals: HashMap::from_iter(args.clone().iter().cloned()), // <--- Copy xn2... ):
+        functions: {
+            let mut fns = ctx.functions.clone();
+            fns.extend_one((name.clone(), sig.clone()));
+            fns
+        },
         can_return: true,
         types: ctx.types.clone(),
         feature_gates: ctx.feature_gates.clone(),
         markers: ctx.markers.clone(),
     };
-    let body = dbg!(parse_block(input, &mut new_context, false))?;
-
-    input.next();
+    let body = dbg!(parse_block(input, &mut new_context, false));
 
     Some(Function {
         name: name.clone(),
-        sig: FunctionSignature {
-            args,
-            return_type: return_ty,
-            name: Some(name),
-        },
+        sig,
         body,
     })
 }
@@ -377,16 +425,16 @@ pub fn infer_expr_type(expr: Expr) -> Type {
         Expr::Binary { rhs, lhs, .. } => {
             let right_ty = infer_expr_type(*rhs.clone());
             let left_ty = infer_expr_type(*lhs.clone());
-
             if right_ty != left_ty {
                 Type::Unknown
             } else {
                 left_ty
             }
-        }
+        },
         Expr::Unary { child, .. } => infer_expr_type(*child.clone()),
         Expr::Variable { ty, .. } => ty,
         Expr::Cast { into, .. } => into,
+        Expr::FunctionCall { _infer_helper, .. } => _infer_helper,
         Expr::Comptime(expr) => infer_expr_type(*expr),
     }
 }
@@ -400,6 +448,7 @@ pub enum Type {
     Int {
         bits: u8,
     },
+    Char,
     String,
     Float {
         bits: u8,
@@ -442,7 +491,7 @@ impl ToString for Type {
 
 pub macro with_feature($ctx:expr, $name:literal, {$($code:tt)*} else {$($else_code:tt)*}) {
     if $ctx.check_feature_gate($name) {
-        $($code)*
+              $($code)*
     }else{
         $($else_code)*
     }
@@ -462,6 +511,7 @@ macro feature_err($name:literal, $($line:literal),*) {{
     Default::default()
 }}
 
+#[deprecated = "use parse_type(...) instead."]
 pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
     match s.as_str() {
         "u32" => Some(Type::UnsignedInt { bits: 32 }),
@@ -470,6 +520,7 @@ pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
         "i8" => Some(Type::Int { bits: 8 }),
         "bool" => Some(Type::Boolean),
         "str" => Some(Type::String),
+        "char" => Some(Type::Char),
         "void" => Some(Type::Void),
         "f32" => Some(Type::Float { bits: 32 }),
         "never" => Some(Type::Never),
@@ -525,6 +576,42 @@ pub fn split_and_parse_args_1(raw: Vec<Token>) -> Option<Vec<Value>> {
     Some(values)
 }
 
+pub fn split_and_parse_args_2(raw: Vec<Token>, ctx: &mut Context) -> Option<Vec<Expr>> {
+    // V2 Syntax: [<expr>, ...]
+
+    let mut args: Vec<Expr> = vec![];
+
+    if raw.is_empty() {
+        return Some(vec![]);
+    }
+
+    let input_i = raw.iter().cloned();
+    let mut input = input_i.peekable();
+    loop {
+        match dbg!(("v2", input.peek()).1) {
+            Some(&Token::Comma) => {
+                input.next();
+                {
+                    input.next();
+                    continue;
+                }
+            }
+            None => break,
+            _ => {}
+        };
+
+        match dbg!(Expr::parse(&mut input, ctx)) {
+            Some(expr) => args.push(expr),
+            None => error_and_return!(
+                #[Error]
+                "expected expression",
+            ),
+        }
+    }
+
+    Some(args)
+}
+
 pub fn parse_marker(
     input: &mut Peekable<impl Iterator<Item = Token>>,
     ctx: &mut Context,
@@ -552,7 +639,6 @@ pub fn parse_item_meta_continous(
     ctx: &mut Context,
 ) -> Option<(Item, Vec<ItemMeta>)> {
     // let token = input.peek()?;
-
     let mut metas = Vec::<ItemMeta>::new();
 
     loop {
@@ -560,12 +646,13 @@ pub fn parse_item_meta_continous(
             parse_marker(input, ctx, false) => Some(marker) => metas.push(ItemMeta::Marker(marker.0, marker.1)),
             Item::parse(input, ctx) => Some(item) => {
                 return Some((item, metas));
-            }
+            },
+            input.peek() => None | Some(TokenKind::EOF) => return None
         // error_and_return!(#[Error] "Invalid meta for item.")
         }
     }
 
-    None
+    unreachable!()
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -577,6 +664,11 @@ pub enum Statement {
         ty: Type,
         ident: String,
         value: Expr,
+    },
+    FunctionCall {
+        func: String,
+        args: Vec<Expr>,
+        intrinsic: bool,
     },
 }
 
@@ -620,6 +712,7 @@ impl Item {
             /* Token::_ViaIdent("internal.keyword.inlined-block") => {
                 return Some(Item::InlinedBlock(parse_block(input, ctx, true)?))
             }*/
+            TokenKind::EOF => return None, // BUGFIX??
             _ => {
                 pipeline_send!(
                     #[Warning]
@@ -680,29 +773,19 @@ pub fn parse_mod(
 pub fn parse_raw_params(input: &mut Peekable<impl Iterator<Item = Token>>) -> Option<Vec<Token>> {
     // Raw Param Syntax:  [ <...> ]
 
-    if try_cast!(input.peek()?, Token::OpeningBracket).is_some() {
-        input.next();
-    } else {
-        return None;
-    }
+    dbg!(input.next()?);
 
     let mut brackets = 1;
     let mut collected = Vec::<Token>::new();
 
-    loop {
-        if brackets == 0 {
-            break;
-        }
-
-        let token = input.peek()?;
-
-        match token {
+    for token in input {
+        match dbg!(&token) {
             Token::OpeningBracket => {
                 brackets += 1;
-            }
+            },
             Token::ClosingBracket => {
                 brackets -= 1;
-            }
+            },
             Token::EOF => error_and_return!(
                 #[Error]
                 "Unexpected end of file",
@@ -711,11 +794,12 @@ pub fn parse_raw_params(input: &mut Peekable<impl Iterator<Item = Token>>) -> Op
             _ => {}
         };
 
-        collected.push(token.clone());
-        input.next();
-    }
+        if brackets == 0{
+            break;
+        }
 
-    collected.pop();
+        collected.push(dbg!(token.clone()));
+    };
 
     Some(collected)
 }
@@ -812,6 +896,7 @@ pub fn parse_fn_type(
         args,
         name: None,
         return_type,
+        is_intrinsic: false,
     })
 }
 
@@ -877,6 +962,7 @@ pub(crate) type BuiltinMarkerFunc =
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Context {
     pub locals: HashMap<String, VarMeta>,
+    pub functions: HashMap<String, FunctionSignature>,
     pub can_return: bool,
     pub types: HashMap<String, Type>,
     pub feature_gates: HashMap<String, FeatureGate>,
@@ -911,6 +997,18 @@ impl Context {
                 }
             }
             _ => unimplemented!(),
+        }
+    }
+
+    #[inline]
+    pub fn get_function(&mut self, func: String) -> (Type, bool) {
+        match self.functions.get(&func) {
+            Some(FunctionSignature {
+                return_type,
+                is_intrinsic,
+                ..
+            }) => (return_type.clone(), *is_intrinsic),
+            None => (Type::Unknown, false),
         }
     }
 
@@ -1012,19 +1110,28 @@ impl Statement {
         input: &mut Peekable<impl Iterator<Item = Token>>,
         ctx: &mut Context,
     ) -> Option<Self> {
-        let token = input.peek()?;
+        let token = input.peek()?.clone();
 
         match_exprs! {
+            token => Token::EOF => return None,
             token => Token::Let => {
                //  input.next();
                 return parse_let(input, ctx);
             },
+            token => Token::Call(func) => {
+                input.next();
+                let func_ins = ctx.get_function(func.clone());
+                return Some(Self::FunctionCall{
+                func: func.clone(),
+                args: dbg!(split_and_parse_args_2(dbg!(parse_raw_params(input))?, ctx))?,
+                intrinsic: func_ins.1,
+            })},
             token => Token::Return => {
-                input.next()?;
+               input.next()?;
                 match ctx.can_return{
                     true => {
                         let res = Some(Self::Return{ value: Expr::parse(input, ctx)?});
-                        _ = cast!(input.next()?, Token::Semicolon);
+                        _ = expect_token(input, Token::Semicolon);
                         return res;
                     },
                     false => error_and_return!(
@@ -1044,6 +1151,7 @@ pub fn parse_node(
     ctx: &mut Context,
 ) -> Option<Node> {
     match_exprs! {
+        input.peek() => Some(Token::EOF) => return None,
         input.peek() => Some(Token::DoubleAt) => {
             let marker = parse_marker(input, ctx, true)?;
 
@@ -1145,7 +1253,7 @@ impl Value {
     /// Checks if a token is a valid value.
     fn valid(token: &Token) -> bool {
         match token {
-            Token::Number(_) | Token::String(_) | Token::Boolean(_) => true,
+            Token::Number(_) | Token::String(_) | Token::Boolean(_) | TokenKind::Char(_) => true,
             _ => false,
         }
     }
@@ -1155,6 +1263,7 @@ impl Value {
             Token::Number(_) => Type::UnsignedInt { bits: 32 },
             Token::String(_) => Type::String,
             Token::Boolean(_) => Type::Boolean,
+            Token::Char(_) => Type::Char,
             _ => Type::Unknown,
         }
     }

@@ -35,7 +35,7 @@ pub fn eval_unary(op: Operator, value: Value) -> Option<Value> {
             _ => unimplemented!(),
         },
         (Operator::Minus, Type::UnsignedInt { .. }) => match *value {
-            TokenKind::Number(n) => Value::new(&TokenKind::Number(-n)),
+            TokenKind::Number(n) => Value::new(&TokenKind::Number(n)),
             _ => unimplemented!(),
         },
         _ => todo!(),
