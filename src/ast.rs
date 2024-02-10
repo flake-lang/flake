@@ -232,8 +232,6 @@ impl Expr {
     ) -> Option<Self> {
         let token = input.peek()?.clone();
 
-        dbg!(("expr!!", &token));
-
         if token == Token::LeftParenthesis {
             input.next();
             let res = Self::parse(input, ctx)?;
@@ -242,17 +240,15 @@ impl Expr {
         }
 
         match_exprs! {
-             dbg!(Value::new(&token)) => Some(value) => {
+             Value::new(&token) => Some(value) => {
                      if input.next().is_none(){
-                    dbg!("c2");
-                    return Some(Self::Constant(value));
+                                        return Some(Self::Constant(value));
                 };
                      return Some(if let Some(op) = Operator::from_token(input.peek().map(|v|v.clone()).unwrap_or(TokenKind::_ViaIdent("_invalid".to_owned()))){
                          input.next()?;
                          Self::Binary { op, rhs: Box::new(Self::Constant(value)), lhs: Box::new(Self::parse(input, ctx)?)}
                      }else {
-                        dbg!("c3");
-                         Self::Constant(value)
+                                                 Self::Constant(value)
                      });
              },
              Operator::from_token(token.clone()) => Some(op) => {
@@ -271,7 +267,7 @@ impl Expr {
                 return Some(Self::FunctionCall{
                 func: func.clone(),
                 _infer_helper: func_ins.0,
-                args: dbg!(split_and_parse_args_2(dbg!(parse_raw_params(input))?, ctx))?,
+                args: split_and_parse_args_2(parse_raw_params(input)?, ctx)?,
                 intrinsic: func_ins.1,
             })},
              token => Token::Identifier(ident) => {
@@ -356,15 +352,11 @@ pub fn parse_function(
     input: &mut Peekable<impl Iterator<Item = Token>>,
     ctx: &mut Context,
 ) -> Option<Function> {
-    dbg!(1);
-
     _ = expect_token(input, Token::Function)?;
 
     let name = try_cast!(input.next()?, Token::Identifier, ident)?.clone();
     let args_raw = parse_raw_params(input).unwrap_or(vec![]);
     let args = parse_function_args(&mut args_raw.iter().cloned().peekable(), ctx)?;
-
-    dbg!((&name, &args_raw));
 
     let mut return_ty = Type::Void;
     if input.peek()? == &Token::Colon {
@@ -409,7 +401,7 @@ pub fn parse_function(
         feature_gates: ctx.feature_gates.clone(),
         markers: ctx.markers.clone(),
     };
-    let body = dbg!(parse_block(input, &mut new_context, false));
+    let body = parse_block(input, &mut new_context, false);
 
     Some(Function {
         name: name.clone(),
@@ -587,7 +579,7 @@ pub fn split_and_parse_args_2(raw: Vec<Token>, ctx: &mut Context) -> Option<Vec<
     let input_i = raw.iter().cloned();
     let mut input = input_i.peekable();
     loop {
-        match dbg!(("v2", input.peek()).1) {
+        match input.peek() {
             Some(&Token::Comma) => {
                 input.next();
                 {
@@ -599,7 +591,7 @@ pub fn split_and_parse_args_2(raw: Vec<Token>, ctx: &mut Context) -> Option<Vec<
             _ => {}
         };
 
-        match dbg!(Expr::parse(&mut input, ctx)) {
+        match Expr::parse(&mut input, ctx) {
             Some(expr) => args.push(expr),
             None => error_and_return!(
                 #[Error]
@@ -772,20 +764,20 @@ pub fn parse_mod(
 pub fn parse_raw_params(input: &mut Peekable<impl Iterator<Item = Token>>) -> Option<Vec<Token>> {
     // Raw Param Syntax:  [ <...> ]
 
-    dbg!(input.next()?);
+    input.next()?;
 
     let mut brackets = 1;
     let mut collected = Vec::<Token>::new();
 
     for token in input {
-        match dbg!(&token) {
+        match &token {
             Token::OpeningBracket => {
                 brackets += 1;
-            },
+            }
             Token::ClosingBracket => {
                 brackets -= 1;
-            },
- /*            Token::EOF => error_and_return!(
+            }
+            /*            Token::EOF => error_and_return!(
                 #[Error]
                 "Unexpected end of file",
                 "sHave you forgotten a semicolon?"
@@ -797,7 +789,7 @@ pub fn parse_raw_params(input: &mut Peekable<impl Iterator<Item = Token>>) -> Op
             break;
         }
 
-        collected.push(dbg!(token.clone()));
+        collected.push(token.clone());
     }
 
     Some(collected)
@@ -807,8 +799,6 @@ pub fn parse_type<'a>(
     input: &mut Peekable<impl Iterator<Item = Token>>,
     ctx: &mut Context,
 ) -> Option<Type> {
-    dbg!(input.peek());
-
     if input.peek()? == &TokenKind::Star {
         input.next()?;
         return parse_type(input, ctx).map(|t| Type::Pointee {
@@ -839,7 +829,7 @@ pub fn parse_type<'a>(
         ),
     }?;
 
-    return dbg!(ty.into());
+    return ty.into();
 }
 
 pub fn parse_type_list(
@@ -881,15 +871,11 @@ pub fn parse_fn_type(
     let mut raw_args = parse_raw_params(input)?;
     let mut args = parse_type_list(&mut raw_args.iter().cloned().peekable(), ctx)?;
 
-    dbg!(&args);
-
     let mut return_type = Type::Void;
-    if dbg!(input.peek()) == Some(&Token::Colon) {
+    if input.peek() == Some(&Token::Colon) {
         input.next()?;
         return_type = parse_type(input, ctx)?;
     }
-
-    dbg!(&return_type);
 
     Some(UnnammedFunctionSignature {
         args,
@@ -911,21 +897,13 @@ pub fn parse_let(
 
     let maybe_explicit_type = parse_raw_params(input);
 
-    dbg!(1);
-
     let ident = try_cast!(input.next()?, Token::Identifier, ident)?;
 
-    dbg!(2);
-
     _ = try_cast!(input.next()?, Token::Equals)?;
-
-    dbg!(3);
 
     let value = Expr::parse(input, ctx)?;
 
     _ = try_cast!(input.next()?, Token::Semicolon)?;
-
-    dbg!((&value, &ident, &maybe_explicit_type));
 
     let ty = match maybe_explicit_type {
         Some(toks) => parse_type(&mut toks.iter().cloned().peekable(), ctx)?,

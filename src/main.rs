@@ -8,27 +8,36 @@
     proc_macro_hygiene,
     extend_one,
     stmt_expr_attributes,
+    exit_status_error,
     decl_macro
 )]
+#![allow(warnings)]
 
 #[macro_use]
 extern crate macros;
 
 use std::{
     collections::HashMap,
+    fs,
+    ops::IndexMut,
     path::{Path, PathBuf},
     process::exit,
     sync::atomic::compiler_fence,
 };
 
+use clap::Parser;
+use clap_derive::Parser;
 use colored::Colorize;
-use inkwell::{passes::PassManagerSubType, values::FunctionValue};
+use inkwell::{passes::PassManagerSubType, targets::TargetTriple, values::FunctionValue};
 use itertools::Itertools;
 use lexer::create_lexer;
 use parser::TokenStream;
 
 use crate::{
-    ast::{parse_node, FnSig, Function, MarkerImpl, Type}, codegen::Compiler, eval::{eval_expr, Context as EvalContext}, token::TokenKind
+    ast::{parse_node, FnSig, Function, MarkerImpl, Type},
+    codegen::Compiler,
+    eval::{eval_expr, Context as EvalContext},
+    token::TokenKind,
 };
 
 extern crate inkwell;
@@ -48,8 +57,56 @@ mod token;
 #[cfg(test)]
 mod tests;
 
+#[derive(Debug, Parser)]
+#[command(version, about, long_about = None)]
+pub struct Cli {
+    pub file: String,
+
+    #[arg(short, long)]
+    pub output: Option<String>,
+    #[arg(long)]
+    pub target: Option<String>,
+
+    #[arg(long)]
+    pub display_llvm_ir: Option<bool>,
+}
+
 fn main() {
-    let code = include_str!("../test.fl");
+    let cli = Cli::parse();
+
+    let code = fs::read_to_string(cli.file.clone()).unwrap();
+    let output_str = format!("{}.bc", cli.file);
+
+    run(code.as_str(), output_str.clone().into());
+
+    let obj_file = format!("{}.o", cli.file);
+
+    std::process::Command::new("llc-14")
+        .arg("--filetype=obj")
+        .args(["-o", obj_file.as_str()])
+        .arg(output_str)
+        .status()
+        .expect("failed to invoke llvm")
+        .exit_ok()
+        .expect(format!("{}", "Failed to compile object file".red()).as_str());
+
+    std::process::Command::new("cc")
+        .args(["-o", cli.output.clone().unwrap().as_str()])
+        .arg(obj_file)
+        .arg("-static")
+        .status()
+        .expect("failed to launch c-compiler.")
+        .exit_ok()
+        .expect(format!("{}", "Failed to link using the c-compiler".red()).as_str());
+
+    println!(
+        "{}, use `{}` to run.",
+        "Done".green(),
+        cli.output.unwrap().italic()
+    );
+}
+
+fn run(code: &str, output: PathBuf) {
     let mut context = ast::Context {
         locals: HashMap::new(),
         can_return: true,
@@ -75,8 +132,6 @@ fn main() {
 
     let mut dbg_trokens = create_lexer(code.clone()).collect_vec();
 
-    dbg!(dbg_trokens);
-
     let mut tokens = create_lexer(code);
 
     let mut tokens_peekable = tokens.peekable();
@@ -84,17 +139,18 @@ fn main() {
     let mut statements = Vec::<ast::Node>::new();
 
     loop {
-
-        if tokens_peekable.peek() == None{
+        if tokens_peekable.peek() == None {
             break;
-        } 
+        }
 
-        if let Some(ast_node) = dbg!(ast::parse_node(&mut tokens_peekable, &mut context)) {
+        if let Some(ast_node) = ast::parse_node(&mut tokens_peekable, &mut context) {
             // eval::eval_statement(ast_node.clone(), &mut eval_context);
             //   println!("{:#?}", &ast_node);
             //  println!("TYPE = {:#?}", ast::infer_expr_type(ast_node.clone()));
-            statements.push(dbg!(ast_node));
-        }else { break; }
+            statements.push(ast_node);
+        } else {
+            break;
+        }
     }
 
     if pipeline::COMPILER_PIPELINE
@@ -112,9 +168,6 @@ fn main() {
         );
         exit(1);
     }
-
-    println!("{:#?}", statements);
-    println!("{:#?}", context);
 
     let serilaized = format!(
         "{}",
@@ -172,12 +225,5 @@ fn main() {
         );
     }
 
-    eprintln!("=== LLVM IR (-Dllvm-ir) ===");
-    compiler.module.print_to_stderr();
-    compiler
-        .module
-        .write_bitcode_to_path(Path::new("../test.fl.bc"));
-
-    eprintln!("=== END ===");
-    dbg!(eval_context);
+    compiler.module.write_bitcode_to_path(output.as_path());
 }

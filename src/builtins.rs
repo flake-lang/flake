@@ -19,8 +19,6 @@ use inkwell::execution_engine::FunctionLookupError;
 use macros::flakc_builtin;
 
 fn _marker_compiler_intrinsic(mut item: &mut Item, ctx: &mut Context, args: Vec<Value>) {
-    dbg!(&item);
-
     if let Item::Function(Function { ref mut name, .. }) = item {
         ctx.functions
             .get_mut(name)

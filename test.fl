@@ -1,10 +1,12 @@
-
 @compiler_intrinsic[]
 fn __const_string[]: *i8;
 
-fn puts[s: str];
+fn puts[s: *i8];
+
+fn malloc[]: *void;
+fn free[ptr: *void];
 
 fn main[]: u32{
-    puts![__const_string!["Hello!"]];
+    puts![__const_string!["Hello, World!"]];
     return 123;
-};
+}

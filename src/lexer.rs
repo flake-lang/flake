@@ -191,19 +191,15 @@ pub fn lex_number_literal(
     let mut buffer = String::new();
     let mut maybe_sign_possible = true;
 
-    dbg!("numeric!!");
-
     loop {
         let chr = peek_or_break!(input).clone();
-        if dbg!(chr).is_ascii_digit() {
+        if chr.is_ascii_digit() {
             input.next();
             buffer.push(chr);
         } else {
             break;
         }
     }
-
-    dbg!(&buffer);
 
     Ok(buffer
         .parse()
@@ -311,7 +307,6 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::TokenKind>
                     )
                 }
                 '0'..'9' => {
-                    dbg!(234);
                     yield Token::Number(
                         lex_number_literal(&mut input).expect("Failed to lex number literal"),
                     )

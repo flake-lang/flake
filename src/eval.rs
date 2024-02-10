@@ -14,7 +14,6 @@ pub struct Context {
 }
 
 pub fn eval_expr(expr: Expr, ctx: &mut Context) -> Option<Value> {
-    println!("Evaluating...");
     match expr {
         Expr::Constant(v) => return Some(v),
         Expr::Variable { ty, ident } => return ctx.variables.get(&ident).cloned(),
@@ -62,8 +61,10 @@ pub fn exec_operation(op: Operator, rhs: Value, lhs: Value) -> Option<Value> {
             }
             (Operator::Minus, TokenKind::Number(n1), TokenKind::Number(n2)) => {
                 Token::Number(n1 - n2)
-            },
-            (Operator::Plus, Token::String(s1), Token::String(s2)) => Token::String(format!("{}{}", s1, s2)),
+            }
+            (Operator::Plus, Token::String(s1), Token::String(s2)) => {
+                Token::String(format!("{}{}", s1, s2))
+            }
             (Operator::Eq, ..) => TokenKind::Boolean(cmp_values(rhs, lhs)),
             _ => todo!(),
         }
