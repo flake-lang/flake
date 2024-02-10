@@ -1,17 +1,17 @@
 {
   "version": "0.2.0",
   "configurations": [
-  {
-    "type": "lldb",
-    "request": "launch",
-    "name": "Cargo launch",
-    "cargo": {
-      "args": [
-        "build"
-      ]
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Cargo launch",
+      "cargo": {
+        "args": [
+          "build"
+        ]
+      },
+      "args": []
     },
-    "args": []
-  },
     {
       "name": "C/C++ Runner: Debug Session",
       "type": "cppdbg",

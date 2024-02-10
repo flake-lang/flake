@@ -1,6 +1,10 @@
-fn putchar[c: char];
+
+@compiler_intrinsic[]
+fn __const_string[]: *i8;
+
+fn puts[s: str];
 
 fn main[]: u32{
-    putchar!['A']
+    puts![__const_string!["Hello!"]];
     return 123;
-}
+};

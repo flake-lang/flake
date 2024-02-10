@@ -338,13 +338,12 @@ pub fn parse_function_args(
     let mut args = FunctionArgs::new();
 
     loop {
-        let name = 
-            match raw.next() {
-                Some(Token::Comma) => continue,
-                Some(Token::Identifier(ident)) => ident,
-                Some(_) => unimplemented!(),
-                None => break,
-            };
+        let name = match raw.next() {
+            Some(Token::Comma) => continue,
+            Some(Token::Identifier(ident)) => ident,
+            Some(_) => unimplemented!(),
+            None => break,
+        };
         _ = expect_token(raw, Token::Colon);
         let ty = parse_type(raw, ctx)?;
         args.push((name, ty));
@@ -430,7 +429,7 @@ pub fn infer_expr_type(expr: Expr) -> Type {
             } else {
                 left_ty
             }
-        },
+        }
         Expr::Unary { child, .. } => infer_expr_type(*child.clone()),
         Expr::Variable { ty, .. } => ty,
         Expr::Cast { into, .. } => into,
@@ -786,20 +785,20 @@ pub fn parse_raw_params(input: &mut Peekable<impl Iterator<Item = Token>>) -> Op
             Token::ClosingBracket => {
                 brackets -= 1;
             },
-            Token::EOF => error_and_return!(
+ /*            Token::EOF => error_and_return!(
                 #[Error]
                 "Unexpected end of file",
-                "Have you forgotten a semicolon?"
-            ),
+                "sHave you forgotten a semicolon?"
+            ), */
             _ => {}
         };
 
-        if brackets == 0{
+        if brackets == 0 {
             break;
         }
 
         collected.push(dbg!(token.clone()));
-    };
+    }
 
     Some(collected)
 }
@@ -1121,9 +1120,11 @@ impl Statement {
             token => Token::Call(func) => {
                 input.next();
                 let func_ins = ctx.get_function(func.clone());
+                let args = split_and_parse_args_2(parse_raw_params(input)?, ctx)?;
+                _ = expect_token(input, Token::Semicolon);
                 return Some(Self::FunctionCall{
                 func: func.clone(),
-                args: dbg!(split_and_parse_args_2(dbg!(parse_raw_params(input))?, ctx))?,
+                args: args,
                 intrinsic: func_ins.1,
             })},
             token => Token::Return => {

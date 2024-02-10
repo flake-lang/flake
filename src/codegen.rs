@@ -138,15 +138,15 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
     pub fn compile_stmt(
         &mut self,
         stmt: Statement,
-    ) -> Result<InstructionValue<'ctx>, CompilerError> {
+    ) -> Result<Option<InstructionValue<'ctx>>, CompilerError> {
         match stmt {
-            Statement::Return { value } => self.build_ret(value),
+            Statement::Return { value } => self.build_ret(value).map(|v|v.into()),
             Statement::Let { ty, ident, value } => {
                 self.create_uninitalized_variable::<true>(ty, ident.clone());
 
                 let compiled_value = self.compile_expr(value).unwrap();
 
-                self.store_in_variable(ident, compiled_value)
+                Ok(Some(self.store_in_variable(ident, compiled_value)?))
             }
             Statement::FunctionCall {
                 func,
@@ -154,10 +154,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 intrinsic,
             } => self.compile_function_call(func, args, intrinsic)?.either(
                 |v| {
-                    v.as_instruction_value()
-                        .ok_or(CompilerError::Other("invalid instruction value"))
+                    Ok(v.as_instruction_value().map(|v|v.into()))
                 },
-                |i| Ok(i),
+                |i| Ok(Some(i)),
             ),
             _ => todo!(),
         }
@@ -277,7 +276,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     .build_load(*ptr, name.clone().as_str())
                     .map_err(|err| CompilerError::LLVMBuilder(err))?
                     .into());
-            },
+            }
             Expr::Cast { into, expr } => self.compile_expr(*expr),
             Expr::FunctionCall {
                 func,
@@ -320,6 +319,18 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     self.builder
                         .build_unconditional_branch(block)
                         .map_err(|err| CompilerError::LLVMBuilder(err))?,
+                )
+            }
+            "__const_string" => {
+                let val = eval::eval_expr(args[0].clone(), self.eval_context).unwrap();
+
+                let s = cast!(val.deref(), TokenKind::String, str);
+
+                Either::Left(
+                    self.builder
+                        .build_global_string_ptr(s.as_str(), "")
+                        .map_err(|err| CompilerError::LLVMBuilder(err))
+                        .map(|v| v.as_pointer_value().into())?,
                 )
             }
             _ => panic!("invalid intrinsic {:?}!", name),
