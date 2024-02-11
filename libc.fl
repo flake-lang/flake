@@ -1,0 +1,35 @@
+// char *gets(char *buffer);
+fn gets[len: u64]: *char;
+// char getchar(void);
+fn getchar[]: char;
+// int puts(const char *string);
+fn puts[string: *char]: i32;
+// int system(const char *string);
+fn system[string: *char]: i32;
+type int = i32;
+type unsigned_int = u32;
+type double = f64;
+type float = f32;
+type FILE = u64;
+type _Decimal32 = u32;
+type _Decimal64 = u64;
+type _Decimal128 = u128;
+type wchar_t = u32;
+type long_int = u64;
+type long = i64;
+type wint_t = wchar_t;
+type va_list = *void;
+type var_name = str;
+type __struct_ptr_t = *void;
+
+@compiler_intrinsic[]
+fn __const_string[]: str;
+
+@compiler_intrinsic[]
+fn __goto_label[]: str;
+
+fn main[]: u64{
+    puts![__const_string!["Enter the command to be executed:"]];
+    system![gets_r![8]];
+    __goto_label!["body"];
+}

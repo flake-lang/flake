@@ -42,6 +42,8 @@ pub enum TokenKind {
     TypeAlias,
     Dollar,
     Function,
+    If,
+    Else,
     Import,
     Call(String),
     Mod,

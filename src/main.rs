@@ -25,6 +25,7 @@ use std::{
     sync::atomic::compiler_fence,
 };
 
+use ast::Module;
 use clap::Parser;
 use clap_derive::Parser;
 use colored::Colorize;
@@ -32,14 +33,15 @@ use inkwell::{passes::PassManagerSubType, targets::TargetTriple, values::Functio
 use itertools::Itertools;
 use lexer::create_lexer;
 use parser::TokenStream;
+use serde::Serialize;
 
 use crate::{
     ast::{parse_node, FnSig, Function, MarkerImpl, Type},
     codegen::Compiler,
     eval::{eval_expr, Context as EvalContext},
+    shared::*,
     token::TokenKind,
 };
-
 
 pub mod ast;
 pub mod builtins;
@@ -51,6 +53,7 @@ mod intrinsics;
 mod lexer;
 mod parser;
 mod pipeline;
+mod shared;
 mod token;
 
 #[cfg(test)]
@@ -68,6 +71,9 @@ pub struct Cli {
 
     #[arg(long)]
     pub display_llvm_ir: Option<bool>,
+
+    #[arg(long = "Zdump-ast", hide = true)]
+    pub dump_ast_as_json: Option<PathBuf>,
 }
 
 fn main() {
@@ -76,7 +82,15 @@ fn main() {
     let code = fs::read_to_string(cli.file.clone()).unwrap();
     let output_str = format!("{}.bc", cli.file);
 
-    run(code.as_str(), output_str.clone().into());
+    run(
+        code.as_str(),
+        output_str.clone().into(),
+        cli.dump_ast_as_json.clone(),
+    );
+
+    if cli.dump_ast_as_json.is_some() {
+        exit(0);
+    }
 
     let obj_file = format!("{}.o", cli.file);
 
@@ -105,7 +119,7 @@ fn main() {
     );
 }
 
-fn run(code: &str, output: PathBuf) {
+fn run(code: &str, output: PathBuf, dump_ast: Option<PathBuf>) {
     let mut context = ast::Context {
         locals: HashMap::new(),
         can_return: true,
@@ -168,17 +182,14 @@ fn run(code: &str, output: PathBuf) {
         exit(1);
     }
 
-    let serilaized = format!(
-        "{}",
-        serde_json::to_string(&serde_json::json! ({
-            "tree": statements,
-            "context": context,
-            "is_transparent": false
-        }))
-        .unwrap()
-    );
+    if let Some(path) = dump_ast {
+        let serialized =
+            serde_json::to_string(&Module::new("<file>", statements, context)).unwrap();
 
-    std::fs::write("test.fl.json", serilaized);
+        std::fs::write(path, serialized);
+
+        return;
+    }
 
     // let ast = dbg!(parser::parse_node(&mut tokens_peekable)).expect("Failed to parse syntax tree");
 
@@ -212,7 +223,7 @@ fn run(code: &str, output: PathBuf) {
                 compiler.target = Box::new(f);
                 compiler.compile_func();
             }
-            _ => todo!(),
+            _ => {}
         }
     }
 

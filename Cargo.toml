@@ -2,7 +2,6 @@
 name = "flake"
 version = "0.1.0"
 edition = "2021"
-
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [[bin]]
@@ -21,9 +20,15 @@ serde = { version = "1.0.195", features = ["derive", "unstable"] }
 serde_json = "1.0.111"
 colored = "2.1.0"
 
+
+
 [features]
+default = ["ast", "eval", "lexer", "llvm-codegen", "clap-cli"]
 ast = []
 eval = []
 lexer = []
 llvm-codegen = ["inkwell"]
 clap-cli = ["clap", "clap_derive"] 
+stdio-pipeline = []
+pretty-output = []
+

@@ -17,3 +17,9 @@ extern void* test(unsigned int* len_ptr){
 
     return mem;
 }
+
+extern char* gets_r(size_t len){
+    char* a = (char*)malloc(len);
+    scanf("%s", a);
+    return a;
+}

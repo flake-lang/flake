@@ -15,7 +15,6 @@ use crate::{
     error_and_return, pipeline_send, str_or_format,
 };
 
-use inkwell::execution_engine::FunctionLookupError;
 use macros::flakc_builtin;
 
 fn _marker_compiler_intrinsic(mut item: &mut Item, ctx: &mut Context, args: Vec<Value>) {

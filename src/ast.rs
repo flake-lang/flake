@@ -1,18 +1,17 @@
 //! Abstract Syntax Tree Types
 
-use inkwell::debug_info::DILexicalBlock;
 use itertools::Itertools;
 
 use crate::{
     feature::{FeatureGate, FeatureKind},
     lexer::{ImportPath, TokenLexer},
-    parser::{self, TokenStream},
     token::{Token, TokenKind},
 };
 use std::{
     any::TypeId,
     collections::HashMap,
     fmt::Write,
+    hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash, Hasher, SipHasher},
     iter::Peekable,
     ops::{Deref, DerefMut},
     sync::mpsc::RecvTimeoutError,
@@ -307,8 +306,8 @@ pub struct Function {
     pub body: Option<Block>,
 }
 
-#[derive(Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct FnSig<ARGS> {
+#[derive(Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize, Hash)]
+pub struct FnSig<ARGS: Hash> {
     pub args: ARGS,
     pub name: Option<String>,
     pub return_type: Type,
@@ -446,7 +445,7 @@ pub fn infer_expr_type(expr: Expr) -> Type {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Hash)]
 pub enum Type {
     Boolean,
     UnsignedInt {
@@ -467,6 +466,8 @@ pub enum Type {
     Pointee {
         target_ty: Box<Type>,
     },
+    Usize,
+    Isize,
     Function(Box<UnnammedFunctionSignature>),
     Void,
     Never,
@@ -491,6 +492,8 @@ impl ToString for Type {
             Self::Unknown => "<unknown>".to_owned(),
             Self::Function(f) => format!("{:?}", *f),
             Self::_Builtin => "<builtin>".to_owned(),
+            Self::Usize => "usize".to_owned(),
+            Self::Isize => "isize".to_owned(),
             _ => "<?>".to_owned(),
         }
     }
@@ -500,6 +503,7 @@ impl Type {
     pub fn is_signed(&self) -> bool {
         match self {
             Self::Int { .. } => true,
+            Self::Isize => true,
             _ => false,
         }
     }
@@ -530,15 +534,24 @@ macro feature_err($name:literal, $($line:literal),*) {{
 #[deprecated = "use parse_type(...) instead."]
 pub fn type_from_str(s: String, ctx: &mut Context) -> Option<Type> {
     match s.as_str() {
+        "u128" => Some(Type::UnsignedInt { bits: 128 }),
+        "u64" => Some(Type::UnsignedInt { bits: 64 }),
         "u32" => Some(Type::UnsignedInt { bits: 32 }),
         "u16" => Some(Type::UnsignedInt { bits: 16 }),
         "u8" => Some(Type::UnsignedInt { bits: 8 }),
         "i8" => Some(Type::Int { bits: 8 }),
+        "i16" => Some(Type::Int { bits: 16 }),
+        "i32" => Some(Type::Int { bits: 32 }),
+        "i64" => Some(Type::Int { bits: 64 }),
+        "i128" => Some(Type::Int { bits: 128 }),
         "bool" => Some(Type::Boolean),
         "str" => Some(Type::String),
         "char" => Some(Type::Char),
         "void" => Some(Type::Void),
+        "usize" => Some(Type::Usize),
+        "isize" => Some(Type::Isize),
         "f32" => Some(Type::Float { bits: 32 }),
+        "f64" => Some(Type::Float { bits: 64 }),
         "never" => Some(Type::Never),
         "__flakec_unknown" => {
             with_feature!(ctx, "type-system-internals", {Some(Type::Unknown)} else {feature_err!("type-system-internals", "required to use this item.")})
@@ -685,6 +698,34 @@ pub enum Statement {
         args: Vec<Expr>,
         intrinsic: bool,
     },
+    If {
+        cond: Expr,
+        block: Block,
+    },
+    Else(Block),
+    While {
+        cond: Expr,
+        block: Block,
+    },
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Module {
+    version: &'static str,
+    hash: u64,
+    tree: Vec<Node>,
+    context: Context,
+}
+
+impl Module {
+    pub fn new(name: &str, tree: Vec<Node>, context: Context) -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION"),
+            hash: 0,
+            tree,
+            context,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -958,7 +999,6 @@ pub enum MarkerImpl {
     BuiltIn(BuiltinMarkerFunc),
 }
 
-use crate::builtins;
 pub(crate) type BuiltinMarkerFunc =
     for<'item, 'ctx> fn(&'item mut Item, &'ctx mut Context, Vec<Value>);
 
@@ -1265,7 +1305,7 @@ impl Value {
 
     pub fn get_type(&self) -> Type {
         match **self {
-            Token::Number(_) => Type::UnsignedInt { bits: 32 },
+            Token::Number(_) => Type::Usize,
             Token::String(_) => Type::String,
             Token::Boolean(_) => Type::Boolean,
             Token::Char(_) => Type::Char,

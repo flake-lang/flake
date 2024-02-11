@@ -48,6 +48,8 @@ pub(self) fn display_message(
 impl MessagePipeline {
     #[track_caller]
     pub fn process_message(&self, msg: Message) {
+        #[cfg(all(lib, not(feature = "stdio-pipeline")))]
+        return;
         use colored::Colorize as _;
         match msg {
             Message::Error { msg, notes } => {

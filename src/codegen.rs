@@ -13,20 +13,13 @@ use std::{
 
 use colored::Colorize;
 use inkwell::{
-    attributes::Attribute,
-    basic_block::{self, BasicBlock},
-    builder::{Builder, BuilderError},
-    context::Context as LLVMContext,
-    module::Module,
-    types::{
+    attributes::Attribute, basic_block::{self, BasicBlock}, builder::{Builder, BuilderError}, context::Context as LLVMContext, module::Module, targets::TargetData, types::{
         AnyType, AnyTypeEnum, ArrayType, AsTypeRef, BasicMetadataTypeEnum, BasicType,
         BasicTypeEnum, IntType, PointerType,
-    },
-    values::{
+    }, values::{
         AnyValue, AnyValueEnum, BasicMetadataValueEnum, BasicValue, BasicValueEnum, BasicValueUse,
         FunctionValue, InstructionValue, IntValue, PointerValue,
-    },
-    AddressSpace,
+    }, AddressSpace
 };
 use itertools::Either;
 use serde::Serialize;
@@ -37,7 +30,7 @@ use crate::{
         self, infer_expr_type, Block, BuiltinMarkerFunc, Context as ASTContext, Expr, Function,
         FunctionSignature, Operator, Statement, Type, Value,
     },
-    cast, compile,
+    cast,
     eval::{self, eval_expr},
     token::TokenKind,
 };
@@ -523,8 +516,11 @@ macro generic_llvm_type_inlined($ctx:expr, $t:expr) {
         Type::Int { bits } => $ctx.custom_width_int_type(bits as u32 as u32).into(),
         Type::Float { bits: 32 } => $ctx.f32_type().into(),
         Type::Char => $ctx.i8_type().into(),
+        Type::Usize => $ctx.i64_type().into(),
+        Type::Isize => $ctx.i64_type().into(),
         Type::String => $ctx.i8_type().ptr_type(AddressSpace::default()).into(),
-        Type::Void => $ctx.opaque_struct_type("").into(),
+        Type::Void => panic!("The `void` type cannot be used directly!"),
+        Type::Pointee { target_ty: Void } => $ctx.i8_type().ptr_type(AddressSpace::default()).into(),
         Type::Pointee { target_ty } => match *target_ty {
             _ => basic_llvm_type($ctx, *target_ty)
                 .ptr_type(AddressSpace::default())
@@ -536,7 +532,6 @@ macro generic_llvm_type_inlined($ctx:expr, $t:expr) {
 
 pub fn llvm_type<'ctx>(ctx: &'ctx LLVMContext, ast_type: Type) -> AnyTypeEnum<'ctx> {
     generic_llvm_type_inlined!(ctx, ast_type)
-    //  ctx.opaque_struct_type("");
 }
 
 macro generic_llvm_value_inlined($ctx:expr, $v:expr) {
@@ -574,6 +569,8 @@ pub fn const_int<'ctx>(ctx: &'ctx LLVMContext, ty: Type, v: u64) -> IntValue<'ct
     match ty {
         Type::UnsignedInt { bits } => ctx.custom_width_int_type(bits as u32).const_int(v, false),
         Type::Int { bits } => ctx.custom_width_int_type(bits as u32).const_int(v, true),
+        Type::Usize => ctx.i64_type().const_int(v, false),
+        Type::Isize => ctx.i64_type().const_int(v, true),
         _ => panic!("{:?} isn't a valid interger type", ty.to_string()),
     }
 }
