@@ -1,3 +1,15 @@
-import "compiler-builtins.primitive.*";
+@compiler_intrinsic[]
+fn __const_string[]: *i8;
 
-pub type uint = u32;
+fn puts[s: *i8];
+
+fn main[]: u32{
+    puts![__const_string!["Hello, World!"]];
+    return 0;
+};
+
+
+// &<value> 
+// alloca <value::type>
+// store <alloca> <value>
+// <ptr> = <alloca::address>

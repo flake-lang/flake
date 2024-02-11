@@ -46,6 +46,7 @@ pub(self) fn display_message(
 }
 
 impl MessagePipeline {
+    #[track_caller]
     pub fn process_message(&self, msg: Message) {
         use colored::Colorize as _;
         match msg {
