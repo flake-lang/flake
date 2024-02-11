@@ -5,7 +5,7 @@ use std::{
     any::Any,
     borrow::{Borrow, BorrowMut},
     collections::{btree_map::ValuesMut, HashMap},
-    fmt::Debug,
+    fmt::{Debug, Display},
     hash::{BuildHasher, Hash},
     ops::Deref,
     sync::{atomic::compiler_fence, Arc},
@@ -35,7 +35,7 @@ use serde_json::ser::CharEscape;
 use crate::{
     ast::{
         self, infer_expr_type, Block, BuiltinMarkerFunc, Context as ASTContext, Expr, Function,
-        FunctionSignature, Statement, Type, Value,
+        FunctionSignature, Operator, Statement, Type, Value,
     },
     cast, compile,
     eval::{self, eval_expr},
@@ -135,12 +135,93 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         }
     }
 
+    pub fn compile_binary_expr(
+        &mut self,
+        op: Operator,
+        lhs: Expr,
+        rhs: Expr,
+    ) -> Result<BasicValueEnum<'ctx>, CompilerError> {
+        let lhs_compiled = self.compile_expr(lhs).unwrap();
+        let rhs_compiled = self.compile_expr(rhs).unwrap();
+
+        let ty = if lhs_compiled.get_type() == rhs_compiled.get_type() {
+            lhs_compiled.get_type()
+        } else {
+            return Err(CompilerError::Other(
+                "lhs and rhs need to be of the same type of an bynary expression.",
+            ));
+        };
+
+        match (op, ty) {
+            (Operator::Plus, BasicTypeEnum::IntType(_)) => self
+                .builder
+                .build_int_add(
+                    lhs_compiled.into_int_value(),
+                    rhs_compiled.into_int_value(),
+                    "add",
+                )
+                .map_err(|err| CompilerError::LLVMBuilder(err))
+                .map(|v| v.into()),
+            (Operator::Minus, BasicTypeEnum::IntType(_)) => self
+                .builder
+                .build_int_sub(
+                    lhs_compiled.into_int_value(),
+                    rhs_compiled.into_int_value(),
+                    "sub",
+                )
+                .map_err(|err| CompilerError::LLVMBuilder(err))
+                .map(|v| v.into()),
+            (Operator::Or, BasicTypeEnum::IntType(_)) => self
+                .builder
+                .build_or(
+                    lhs_compiled.into_int_value(),
+                    rhs_compiled.into_int_value(),
+                    "int_or",
+                )
+                .map_err(|err| CompilerError::LLVMBuilder(err))
+                .map(|v| v.into()),
+            _ => todo!(),
+        }
+    }
+
+    pub fn compile_unary_expr(
+        &mut self,
+        op: Operator,
+        value: Expr,
+    ) -> Result<BasicValueEnum<'ctx>, CompilerError> {
+        let val = self.compile_expr(value).unwrap();
+
+        match (op, val) {
+            (Operator::Multiply, BasicValueEnum::PointerValue(p)) => self
+                .builder
+                .build_load(p, "deref")
+                .map_err(|err| CompilerError::LLVMBuilder(err)),
+            (Operator::Not, BasicValueEnum::IntValue(v)) => self
+                .builder
+                .build_not(v, "not")
+                .map_err(|err| CompilerError::LLVMBuilder(err))
+                .map(|v| v.as_basic_value_enum()),
+            (Operator::Minus, BasicValueEnum::IntValue(v)) => self
+                .builder
+                .build_int_neg(v, "neg")
+                .map_err(|err| CompilerError::LLVMBuilder(err))
+                .map(|v| v.into()),
+            (Operator::Minus, BasicValueEnum::FloatValue(v)) => self
+                .builder
+                .build_float_neg(v, "neg")
+                .map_err(|err| CompilerError::LLVMBuilder(err))
+                .map(|v| v.into()),
+            (Operator::And, v) => self.build_take_ptr(v).map(|v| v.into()),
+            (_, _) => todo!(),
+        }
+    }
+
     pub fn compile_stmt(
         &mut self,
         stmt: Statement,
     ) -> Result<Option<InstructionValue<'ctx>>, CompilerError> {
         match stmt {
-            Statement::Return { value } => self.build_ret(value).map(|v|v.into()),
+            Statement::Return { value } => self.build_ret(value).map(|v| v.into()),
             Statement::Let { ty, ident, value } => {
                 self.create_uninitalized_variable::<true>(ty, ident.clone());
 
@@ -153,13 +234,29 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 args,
                 intrinsic,
             } => self.compile_function_call(func, args, intrinsic)?.either(
-                |v| {
-                    Ok(v.as_instruction_value().map(|v|v.into()))
-                },
+                |v| Ok(v.as_instruction_value().map(|v| v.into())),
                 |i| Ok(Some(i)),
             ),
             _ => todo!(),
         }
+    }
+
+    pub fn build_take_ptr(
+        &mut self,
+        v: impl BasicValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, CompilerError> {
+        let ty = v.as_basic_value_enum().get_type();
+
+        let alloca = self
+            .builder
+            .build_alloca(ty, "take_ptr")
+            .map_err(|err| CompilerError::LLVMBuilder(err))?;
+
+        self.builder
+            .build_store(alloca, v)
+            .map_err(|err| CompilerError::LLVMBuilder(err))?;
+
+        Ok(alloca)
     }
 
     #[inline]
@@ -277,7 +374,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     .map_err(|err| CompilerError::LLVMBuilder(err))?
                     .into());
             }
-            Expr::Cast { into, expr } => self.compile_expr(*expr),
+            Expr::Unary { op, child } => self.compile_unary_expr(op, *child),
+            Expr::Cast { into, expr } => self.compile_cast(into, *expr),
+            Expr::Binary { op, rhs, lhs } => self.compile_binary_expr(op, *lhs, *rhs),
             Expr::FunctionCall {
                 func,
                 args,
@@ -292,6 +391,25 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 })?,
             _ => todo!(),
         }
+    }
+
+    pub fn compile_cast(
+        &mut self,
+        target: Type,
+        expr: Expr,
+    ) -> Result<BasicValueEnum<'ctx>, CompilerError> {
+        let val = self.compile_expr(expr).unwrap();
+        let ty = basic_llvm_type(self.llvm_context, target.clone());
+
+        Ok(match (ty, val) {
+            (BasicTypeEnum::PointerType(p), BasicValueEnum::PointerValue(v)) => {
+                v.const_cast(p).into()
+            }
+            (BasicTypeEnum::IntType(i), BasicValueEnum::IntValue(v)) => {
+                v.const_cast(i, target.is_signed()).into()
+            }
+            _ => todo!(),
+        })
     }
 
     pub fn invoke_intrinsic(
@@ -395,24 +513,7 @@ fn create_entry_block_alloca<'a, 'ctx>(
 }
 
 pub fn basic_llvm_type<'ctx>(ctx: &'ctx LLVMContext, ast_type: Type) -> BasicTypeEnum<'ctx> {
-    match ast_type {
-        Type::Boolean => return ctx.bool_type().as_basic_type_enum(),
-        Type::UnsignedInt { bits } => ctx.custom_width_int_type(bits as u32).as_basic_type_enum(),
-        Type::Int { bits } => ctx
-            .custom_width_int_type(bits as u32 as u32)
-            .as_basic_type_enum(),
-        Type::Float { bits: 32 } => ctx.f32_type().as_basic_type_enum(),
-        Type::Char => ctx.i8_type().as_basic_type_enum(),
-        Type::String => ctx.i8_type().ptr_type(AddressSpace::default()).into(),
-        Type::Void => ctx.const_struct(&[], false).get_type().as_basic_type_enum(),
-        Type::Pointee { target_ty } => basic_llvm_type(ctx, *target_ty)
-            .ptr_type(AddressSpace::default())
-            .as_basic_type_enum(),
-        _ => panic!(
-            "The type {:?} is not a valid llvm basic type",
-            ast_type.to_string()
-        ),
-    }
+    generic_llvm_type_inlined!(ctx, ast_type)
 }
 
 macro generic_llvm_type_inlined($ctx:expr, $t:expr) {
@@ -423,15 +524,19 @@ macro generic_llvm_type_inlined($ctx:expr, $t:expr) {
         Type::Float { bits: 32 } => $ctx.f32_type().into(),
         Type::Char => $ctx.i8_type().into(),
         Type::String => $ctx.i8_type().ptr_type(AddressSpace::default()).into(),
-        Type::Pointee { target_ty } => basic_llvm_type($ctx, *target_ty)
-            .ptr_type(AddressSpace::default())
-            .into(),
+        Type::Void => $ctx.opaque_struct_type("").into(),
+        Type::Pointee { target_ty } => match *target_ty {
+            _ => basic_llvm_type($ctx, *target_ty)
+                .ptr_type(AddressSpace::default())
+                .into(),
+        },
         _ => panic!("The type {:?} is not a valid llvm type!", $t.to_string()),
     }
 }
 
 pub fn llvm_type<'ctx>(ctx: &'ctx LLVMContext, ast_type: Type) -> AnyTypeEnum<'ctx> {
     generic_llvm_type_inlined!(ctx, ast_type)
+    //  ctx.opaque_struct_type("");
 }
 
 macro generic_llvm_value_inlined($ctx:expr, $v:expr) {

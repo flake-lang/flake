@@ -40,7 +40,6 @@ use crate::{
     token::TokenKind,
 };
 
-extern crate inkwell;
 
 pub mod ast;
 pub mod builtins;
@@ -100,7 +99,7 @@ fn main() {
         .expect(format!("{}", "Failed to link using the c-compiler".red()).as_str());
 
     println!(
-        "{}, use `{}` to run.",
+        "{}, use \"{}\" to run.",
         "Done".green(),
         cli.output.unwrap().italic()
     );
@@ -224,6 +223,8 @@ fn run(code: &str, output: PathBuf) {
             "[Generated IR may be invalid!]".red().bold()
         );
     }
+
+    compiler.module.print_to_stderr();
 
     compiler.module.write_bitcode_to_path(output.as_path());
 }

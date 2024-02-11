@@ -27,6 +27,8 @@ pub enum Operator {
     Modulo,
     Not,
     Eq,
+    And,
+    Or,
 }
 
 impl Operator {
@@ -39,6 +41,8 @@ impl Operator {
             Token::Percent => Some(Self::Modulo),
             Token::ExclamationMark => Some(Self::Not),
             Token::DoubleEquals => Some(Self::Eq),
+            Token::And => Some(Self::And),
+            Token::Or => Some(Self::Or),
             _ => None,
         }
     }
@@ -81,6 +85,8 @@ pub enum Expr {
         expr: Box<Expr>,
     },
     Comptime(Box<Expr>),
+    #[serde(skip, untagged)]
+    _Null,
 }
 
 macro_rules! match_exprs {
@@ -189,9 +195,10 @@ pub fn parse_cast(
     ctx: &mut Context,
 ) -> Option<Expr> {
     // Syntax: cast[<type>] <expr>
-    input.next();
 
-    match input.next()? {
+    input.next()?;
+
+    match dbg!(input.next()?) {
         Token::OpeningBracket => {}
         t => {
             pipeline_send!(
@@ -230,58 +237,66 @@ impl Expr {
         input: &mut Peekable<impl Iterator<Item = Token>>,
         ctx: &mut Context,
     ) -> Option<Self> {
-        let token = input.peek()?.clone();
+        match {
+            let token = input.peek()?.clone();
 
-        if token == Token::LeftParenthesis {
-            input.next();
-            let res = Self::parse(input, ctx)?;
-            input.next();
-            return Some(res);
-        }
-
-        match_exprs! {
-             Value::new(&token) => Some(value) => {
-                     if input.next().is_none(){
-                                        return Some(Self::Constant(value));
-                };
-                     return Some(if let Some(op) = Operator::from_token(input.peek().map(|v|v.clone()).unwrap_or(TokenKind::_ViaIdent("_invalid".to_owned()))){
-                         input.next()?;
-                         Self::Binary { op, rhs: Box::new(Self::Constant(value)), lhs: Box::new(Self::parse(input, ctx)?)}
-                     }else {
-                                                 Self::Constant(value)
-                     });
-             },
-             Operator::from_token(token.clone()) => Some(op) => {
-                     input.next()?;
-                     return Some(Self::Unary { op, child: Box::new(Self::parse(input, ctx)?) });
-             },
-             token => Token::Comptime => {
-                    input.next()?;
-                    let expr = Self::parse(input, ctx)?;
-                    return Some(Self::Comptime(Box::new(expr)));
-             },
-             token => Token::Cast => return parse_cast(input, ctx),
-             token => Token::Call(func) => {
+            if token == Token::LeftParenthesis {
                 input.next();
-                let func_ins = ctx.get_function(func.clone());
-                return Some(Self::FunctionCall{
-                func: func.clone(),
-                _infer_helper: func_ins.0,
-                args: split_and_parse_args_2(parse_raw_params(input)?, ctx)?,
-                intrinsic: func_ins.1,
-            })},
-             token => Token::Identifier(ident) => {
-                    let ident_cloned = ident.clone();
-                    let ty = ctx.typeof_variable(ident_cloned.clone())?;
+                let res = Self::parse(input, ctx)?;
+                input.next();
+                return Some(res);
+            }
+
+            match_exprs! {
+                 Value::new(&token) => Some(value) => {
+                         if input.next().is_none(){
+                                            return Some(Self::Constant(value));
+                    };
+                         return Some(if let Some(op) = Operator::from_token(input.peek().map(|v|v.clone()).unwrap_or(TokenKind::_ViaIdent("_invalid".to_owned()))){
+                             input.next()?;
+                             Self::Binary { op, rhs: Box::new(Self::Constant(value)), lhs: Box::new(Self::parse(input, ctx)?)}
+                         }else {
+                                                     Self::Constant(value)
+                         });
+                 },
+                 Operator::from_token(token.clone()) => Some(op) => {
+                         input.next()?;
+                         return Some(Self::Unary { op, child: Box::new(Self::parse(input, ctx)?) });
+                 },
+                 token => Token::Comptime => {
+                        input.next()?;
+                        let expr = Self::parse(input, ctx)?;
+                        return Some(Self::Comptime(Box::new(expr)));
+                 },
+                 token => Token::Cast => return parse_cast(input, ctx),
+                 token => Token::Call(func) => {
                     input.next();
-                    return Some(Self::Variable { ty, ident: ident_cloned });
-             }
+                    let func_ins = ctx.get_function(func.clone());
+                    return Some(Self::FunctionCall{
+                    func: func.clone(),
+                    _infer_helper: func_ins.0,
+                    args: split_and_parse_args_2(parse_raw_params(input)?, ctx)?,
+                    intrinsic: func_ins.1,
+                })},
+                 token => Token::Identifier(ident) => {
+                        let ident_cloned = ident.clone();
+                        let ty = ctx.typeof_variable(ident_cloned.clone())?;
+                        input.next();
+                        return Some(Self::Variable { ty, ident: ident_cloned });
+                 }
 
-        };
+            };
 
-        //  {input.next(); Self::parse(input)} => Some(expr) => return Some(expr)
+            None
 
-        None
+            //  {input.next(); Self::parse(input)} => Some(expr) => return Some(expr)
+
+            // None
+        } {
+            None => return None,
+            Some(Self::_Null) => return None,
+            s => s,
+        }
     }
 }
 
@@ -427,6 +442,7 @@ pub fn infer_expr_type(expr: Expr) -> Type {
         Expr::Cast { into, .. } => into,
         Expr::FunctionCall { _infer_helper, .. } => _infer_helper,
         Expr::Comptime(expr) => infer_expr_type(*expr),
+        Expr::_Null => unreachable!(),
     }
 }
 
@@ -476,6 +492,15 @@ impl ToString for Type {
             Self::Function(f) => format!("{:?}", *f),
             Self::_Builtin => "<builtin>".to_owned(),
             _ => "<?>".to_owned(),
+        }
+    }
+}
+
+impl Type {
+    pub fn is_signed(&self) -> bool {
+        match self {
+            Self::Int { .. } => true,
+            _ => false,
         }
     }
 }
@@ -579,11 +604,10 @@ pub fn split_and_parse_args_2(raw: Vec<Token>, ctx: &mut Context) -> Option<Vec<
     let input_i = raw.iter().cloned();
     let mut input = input_i.peekable();
     loop {
-        match input.peek() {
+        match dbg!(input.peek()) {
             Some(&Token::Comma) => {
                 input.next();
                 {
-                    input.next();
                     continue;
                 }
             }
@@ -773,24 +797,26 @@ pub fn parse_raw_params(input: &mut Peekable<impl Iterator<Item = Token>>) -> Op
         match &token {
             Token::OpeningBracket => {
                 brackets += 1;
+                collected.push(token);
             }
             Token::ClosingBracket => {
                 brackets -= 1;
+                collected.push(token);
             }
             /*            Token::EOF => error_and_return!(
                 #[Error]
                 "Unexpected end of file",
                 "sHave you forgotten a semicolon?"
             ), */
-            _ => {}
+            _ => collected.push(token.clone()),
         };
 
         if brackets == 0 {
             break;
         }
-
-        collected.push(token.clone());
     }
+
+    collected.pop();
 
     Some(collected)
 }

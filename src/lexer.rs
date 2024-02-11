@@ -291,6 +291,8 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::TokenKind>
                 '<' => yield lex_token(Token::LessThan, &mut input),
                 '$' => yield lex_token(Token::Dollar, &mut input),
                 '@' => yield lex_token(Token::At, &mut input),
+                '&' => yield lex_token(Token::And, &mut input),
+                '|' => yield lex_token(Token::Or, &mut input),
                 '[' => yield lex_token(Token::OpeningBracket, &mut input),
                 ':' => yield lex_token(Token::Colon, &mut input),
                 ']' => yield lex_token(Token::ClosingBracket, &mut input),
@@ -300,17 +302,17 @@ pub fn create_lexer<'a>(code: &'a str) -> impl Iterator<Item = token::TokenKind>
                     yield Token::String(
                         lex_string_literal(&mut input).expect("Failed to lex string literal"),
                     )
-                }
+                },
                 '\'' => {
                     yield Token::Char(
                         lex_char_literal(&mut input).expect("Failed to lex char literal"),
                     )
-                }
+                },
                 '0'..'9' => {
                     yield Token::Number(
                         lex_number_literal(&mut input).expect("Failed to lex number literal"),
                     )
-                }
+                },
                 _ => {
                     yield lex_token(
                         match lex_unhandled(&mut input) {
